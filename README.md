@@ -5,14 +5,18 @@ A Kubernetes port forwarder using SSH with a nice TUI.
 
 ## Features
 
-- [ ] Allow access to a namespace
-- [ ] Allow access to a pod
+- [ ] restrict access to a namespace
+- [ ] restrict access to a pod
 - [ ] Jumphost ssh
 - [ ] TUI
 - [ ] OTP
 - [ ] logs
-- [ ] allow deny metrics
-	
+- [ ] allow/deny metrics
+- [ ] reload config on changes
+- [ ] config map example
+- [ ] kubernetes example
+- [ ] helm example	
+
 ## Configuration
 
 ```yaml

@@ -26,6 +26,7 @@ func (srv *Server) PublicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 
+	// looking for a matching username
 	perm, ok := srv.keys[ctx.User()]
 	if !ok {
 		srv.logger.Warn("no such username", "username", ctx.User(), "ip", ctx.RemoteAddr().String())

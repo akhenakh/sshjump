@@ -60,6 +60,7 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 		perm.Key = key
 		m[perm.Username] = perm
 	}
+
 	return m
 }
 
@@ -67,6 +68,7 @@ func main() {
 	type EnvConfig struct {
 		LogLevel   string `env:"LOG_LEVEL" envDefault:"INFO"`
 		ConfigFile string `env:"CONFIG_FILE" envDefault:"sshjump.yaml"`
+		Host       string `env:"HOST" envDefault:"0.0.0.0"`
 		Port       int    `env:"PORT" envDefault:"2222"`
 		HealthPort int    `env:"HEALTH_PORT" envDefault:"6666"`
 	}
@@ -130,7 +132,7 @@ func main() {
 
 		healthpb.RegisterHealthServer(grpcHealthServer, healthServer)
 
-		haddr := fmt.Sprintf(":%d", envCfg.HealthPort)
+		haddr := fmt.Sprintf("%s:%d", envCfg.Host, envCfg.HealthPort)
 		hln, err := net.Listen("tcp", haddr)
 		if err != nil {
 			logger.Error("gRPC Health server: failed to listen", "error", err)
@@ -152,18 +154,15 @@ func main() {
 
 		sshServer = &ssh.Server{
 			Handler: s.Handler,
-			LocalPortForwardingCallback: ssh.LocalPortForwardingCallback(
-				func(ctx ssh.Context, dhost string, dport uint32) bool {
-					slog.Debug("Accepted forward", "host", dhost, "port", dport)
+			LocalPortForwardingCallback: ssh.LocalPortForwardingCallback(func(ctx ssh.Context, dhost string, dport uint32) bool {
+				slog.Debug("Accepted forward", "host", dhost, "port", dport)
 
-					return true
-				}),
-			ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(
-				func(ctx ssh.Context, host string, port uint32) bool {
-					slog.Debug("attempt to bind granted", "host", host, "port", port)
-
-					return true
-				}),
+				return true
+			}),
+			//ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(func(ctx ssh.Context, host string, port uint32) bool {
+			//	slog.Debug("attempt to bind granted", "host", host, "port", port)
+			//	return true
+			//}),
 			RequestHandlers: map[string]ssh.RequestHandler{
 				"tcpip-forward":        forwardHandler.HandleSSHRequest,
 				"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
@@ -206,7 +205,7 @@ func main() {
 	}
 
 	if sshServer != nil {
-		sshServer.Shutdown(ctx)
+		sshServer.Shutdown(ctx) //nolint:errcheck
 	}
 
 	err = g.Wait()

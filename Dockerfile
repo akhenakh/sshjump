@@ -12,4 +12,5 @@ COPY --from=build /app/sshjump /sshjump
 
 USER nonroot:nonroot
 
+EXPOSE 2222
 CMD ["/sshjump"]
