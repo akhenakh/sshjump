@@ -143,44 +143,17 @@ func main() {
 		return grpcHealthServer.Serve(hln)
 	})
 
-	s := &Server{
-		logger: logger,
-		keys:   keys,
-	}
+	s := NewServer(logger, keys)
 
 	// ssh server
 	g.Go(func() error {
-		forwardHandler := &ssh.ForwardedTCPHandler{}
-
-		sshServer = &ssh.Server{
-			Handler: s.Handler,
-			LocalPortForwardingCallback: ssh.LocalPortForwardingCallback(func(ctx ssh.Context, dhost string, dport uint32) bool {
-				slog.Debug("Accepted forward", "host", dhost, "port", dport)
-
-				return true
-			}),
-			//ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(func(ctx ssh.Context, host string, port uint32) bool {
-			//	slog.Debug("attempt to bind granted", "host", host, "port", port)
-			//	return true
-			//}),
-			RequestHandlers: map[string]ssh.RequestHandler{
-				"tcpip-forward":        forwardHandler.HandleSSHRequest,
-				"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
-			},
-		}
-
-		publicKeyOption := ssh.PublicKeyAuth(s.PublicKeyHandler)
-		if err := sshServer.SetOption(publicKeyOption); err != nil {
-			return err
-		}
-
 		l, err := net.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
 		if err != nil {
 			return err
 		}
 		logger.Info("starting ssh server", "port", envCfg.Port)
 
-		if err := sshServer.Serve(l); err != nil && err != ssh.ErrServerClosed {
+		if err := s.Serve(l); err != nil && err != ssh.ErrServerClosed {
 			return err
 		}
 
