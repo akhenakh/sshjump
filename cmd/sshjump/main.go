@@ -17,6 +17,9 @@ import (
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"gopkg.in/yaml.v3"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 var (
@@ -66,11 +69,12 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 
 func main() {
 	type EnvConfig struct {
-		LogLevel   string `env:"LOG_LEVEL" envDefault:"INFO"`
-		ConfigFile string `env:"CONFIG_FILE" envDefault:"sshjump.yaml"`
-		Host       string `env:"HOST" envDefault:"0.0.0.0"`
-		Port       int    `env:"PORT" envDefault:"2222"`
-		HealthPort int    `env:"HEALTH_PORT" envDefault:"6666"`
+		LogLevel       string `env:"LOG_LEVEL" envDefault:"INFO"`
+		ConfigFile     string `env:"CONFIG_FILE" envDefault:"sshjump.yaml"`
+		Host           string `env:"HOST" envDefault:"0.0.0.0"`
+		Port           int    `env:"PORT" envDefault:"2222"`
+		HealthPort     int    `env:"HEALTH_PORT" envDefault:"6666"`
+		KubeConfigPath string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
 	}
 
 	// TODO: reload config on changes
@@ -111,12 +115,39 @@ func main() {
 	keys := readKeys(logger, cfg)
 
 	if len(keys) == 0 {
-		logger.Error("no authorized keys provided")
-		os.Exit(1)
 	}
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
+
+	kubeConfig := &rest.Config{}
+	if envCfg.KubeConfigPath != "" {
+		// use the current context in kubeconfig
+		config, err := clientcmd.BuildConfigFromFlags("", envCfg.KubeConfigPath)
+		if err != nil {
+			logger.Error("can't create kubernetes config from path",
+				"error", err,
+				"path", envCfg.KubeConfigPath,
+			)
+			os.Exit(1)
+		}
+		kubeConfig = config
+	} else {
+		// creates the in-cluster Kubernetes config
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			logger.Error("can't create kubernetes config from within cluster", "error", err)
+			os.Exit(1)
+		}
+		kubeConfig = config
+	}
+
+	// creates a new clientset
+	clientset, err := kubernetes.NewForConfig(kubeConfig)
+	if err != nil {
+		logger.Error("can't create kubernetes client", "error", err)
+		os.Exit(1)
+	}
 
 	// catch termination
 	interrupt := make(chan os.Signal, 1)
@@ -143,7 +174,7 @@ func main() {
 		return grpcHealthServer.Serve(hln)
 	})
 
-	s := NewServer(logger, keys)
+	s := NewServer(logger, keys, clientset)
 
 	// ssh server
 	g.Go(func() error {
