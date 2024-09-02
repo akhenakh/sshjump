@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,7 +10,6 @@ import (
 
 	"github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -127,25 +125,4 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 		defer dconn.Close()
 		io.Copy(dconn, ch)
 	}()
-}
-
-// PortsForUser return a list of services the provided user is allowed to reach
-func (srv *Server) PortsForUser(ctx context.Context, user string) ([]string, error) {
-	// list all pods in all namespaces
-	pods, err := srv.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("can't fetch pods list %w", err)
-	}
-
-	// loop through each pod and print its name, namespace, and ports
-	for _, pod := range pods.Items {
-		fmt.Printf("Pod %s/%s:\n", pod.Namespace, pod.Name)
-		for _, container := range pod.Spec.Containers {
-			fmt.Printf("  Container %s:\n", container.Name)
-			for _, port := range container.Ports {
-				fmt.Printf("    Port %d (%s)\n", port.ContainerPort, port.Protocol)
-			}
-		}
-	}
-	return nil, nil
 }
