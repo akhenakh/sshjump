@@ -26,4 +26,5 @@ type Permission struct {
 	AuthorizedKey string        `yaml:"key"`      // AuthorizedKey is the authorized key for the user.
 	Key           ssh.PublicKey `yaml:"-"`
 	Namespaces    []Namespace   `yaml:"namespaces"` // Namespaces is a list of namespaces the user has access to.
+	AllowAll      bool          `yaml:"allowAll"`   // allow this user to connect to every detected ports
 }

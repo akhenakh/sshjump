@@ -39,6 +39,8 @@ SSHJump is mainly intended to run from inside a Kubernetes cluster but can be us
 
 If `KUBE_CONFIG_PATH` env variable is set to a `﻿.kube/config` SSHJump will use it to connect the Kubernetes API.
 
+
+![SSH Jump kangaroo logo](img/sshjump512.png?raw=true "SSH Jump logo")
 ## Configuration
 
 Example configuration to allow the user `bob` to access `nginx` and `redis` in the `projecta` namespace.
@@ -86,5 +88,4 @@ permissions:
 - [ ] reload config on changes
 - [ ] config map example
 - [ ] kubernetes example
-- [ ] helm example	
-
+- [ ] helm example

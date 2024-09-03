@@ -39,3 +39,26 @@ func (srv *Server) PortsForUser(ctx context.Context, user string) ([]containerPo
 
 	return cps, nil
 }
+
+// filter cps using user permissions
+func (srv *Server) allowed(cps []containerPort, user string) []containerPort {
+	userPerms, exists := srv.keys[user]
+	if !exists {
+		// If the user doesn't exist in the permissions map, return an empty slice
+		return []containerPort{}
+	}
+
+	if userPerms.AllowAll {
+		return cps
+	}
+
+	var allowed []containerPort
+
+	// TODO: check for matching namespace
+
+	// for _, ns := range userPerms.Namespaces {
+
+	// }
+
+	return allowed
+}
