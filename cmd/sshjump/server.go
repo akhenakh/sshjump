@@ -5,7 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/gliderlabs/ssh"
@@ -17,8 +17,9 @@ type Server struct {
 	logger *slog.Logger
 	*ssh.Server
 	clientset *kubernetes.Clientset
-	mu        sync.Mutex
-	keys      map[string]Permission
+
+	mu          sync.Mutex
+	permissions map[string]Permission
 }
 
 // direct-tcpip data struct as specified in RFC4254, Section 7.2
@@ -32,9 +33,9 @@ type localForwardChannelData struct {
 
 func NewServer(logger *slog.Logger, keys map[string]Permission, clientset *kubernetes.Clientset) *Server {
 	s := &Server{
-		logger:    logger,
-		keys:      keys,
-		clientset: clientset,
+		logger:      logger,
+		permissions: keys,
+		clientset:   clientset,
 	}
 	sshServer = &ssh.Server{
 		Handler: s.Handler,
@@ -59,25 +60,37 @@ func NewServer(logger *slog.Logger, keys map[string]Permission, clientset *kuber
 }
 
 func (srv *Server) Handler(s ssh.Session) {
-	srv.logger.Info("login", "username", s.User(), "ip", s.RemoteAddr().String())
+	srv.logger.Info("login",
+		"username", s.User(),
+		"ip", s.RemoteAddr().String(),
+	)
 	io.WriteString(s, fmt.Sprintf("user %s\n", s.User()))
 	select {}
 }
 
-func (srv *Server) PublicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
+func (srv *Server) PermsForUser(user string) *Permission {
 	srv.mu.Lock()
 	defer srv.mu.Unlock()
 
 	// looking for a matching username
-	perm, ok := srv.keys[ctx.User()]
+	perm, ok := srv.permissions[user]
 	if !ok {
+		return nil
+	}
+
+	return &perm
+}
+
+func (srv *Server) PublicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
+	perms := srv.PermsForUser(ctx.User())
+	if perms == nil {
 		srv.logger.Warn("no such username", "username", ctx.User(), "ip", ctx.RemoteAddr().String())
 
 		return false
 	}
 
 	// validate key
-	if ssh.KeysEqual(key, perm.Key) {
+	if ssh.KeysEqual(key, perms.Key) {
 		return true
 	}
 
@@ -94,15 +107,59 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 		return
 	}
 
+	srv.logger.Debug("tcp fwd request", "user", ctx.User(), "host", d.DestAddr, "port", d.DestPort)
+
 	if s.LocalPortForwardingCallback == nil || !s.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
 		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
 		return
 	}
 
-	dest := net.JoinHostPort("192.168.160.2", strconv.FormatInt(int64(d.DestPort), 10))
+	ports, err := srv.KubernetesPortsForUser(ctx, ctx.User())
+	if err != nil {
+		newChan.Reject(gossh.ConnectionFailed, "error querying Kubernetes api: "+err.Error())
+
+		return
+	}
+
+	var addr string
+	// test for service request
+	if strings.HasPrefix(d.DestAddr, "srv.") {
+		ds := strings.Split(d.DestAddr, ".")
+		if len(ds) != 4 {
+			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes destination")
+
+			return
+		}
+		namespace := ds[1]
+		service := ds[2]
+		addr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
+		if !ok {
+			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
+
+			return
+		}
+		addr = addr
+	} else {
+
+		ds := strings.Split(d.DestAddr, ".")
+		if len(ds) != 3 {
+			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes destination")
+
+			return
+		}
+		namespace := ds[0]
+		service := ds[1]
+		addr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
+		if !ok {
+			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
+
+			return
+		}
+		addr = addr
+	}
 
 	var dialer net.Dialer
-	dconn, err := dialer.DialContext(ctx, "tcp", dest)
+	dconn, err := dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
 		newChan.Reject(gossh.ConnectionFailed, err.Error())
 		return

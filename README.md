@@ -5,14 +5,16 @@ A Kubernetes port forwarder using SSH and a nice TUI.
 
 SSHJump uses SSH public key authentication to validate users and permissions.
 
+![SSH Jump kangaroo logo](img/sshjump512.png?raw=true "SSH Jump logo")
+
 ## Usage
 
-Use SSH local forward to forward any port from the cluster:
+Use SSH local forward to forward any ports from the cluster:
 
 ```sh
 ssh -L8080:nginx:8080 -p 2222 k8s.cluster.domain.tld
 ```
-If you are authorized sshjump will connect your localhost port 8080 to the first running container named `nginx`.
+If you are authorized sshjump will connect your localhost port 8080 to the first running pod named `nginx`.
 
 ### Target Selection
 
@@ -40,8 +42,8 @@ SSHJump is mainly intended to run from inside a Kubernetes cluster but can be us
 If `KUBE_CONFIG_PATH` env variable is set to a `﻿.kube/config` SSHJump will use it to connect the Kubernetes API.
 
 
-![SSH Jump kangaroo logo](img/sshjump512.png?raw=true "SSH Jump logo")
-## Configuration
+
+## Config file
 
 Example configuration to allow the user `bob` to access `nginx` and `redis` in the `projecta` namespace.
 ```yaml
@@ -56,13 +58,14 @@ permissions:
     - name: "nginx"
       ports:
         - 8080
+        - 8888
     services:
     - name: "redis"
       ports:
         - 6379
 ```
 
-By default SSHJump will deny access to any namespaces if not explicetly mentioned in the `namespaces` list, to let a user access to everything (like in a dev env) use `allowAll: true`
+By default SSHJump will deny access to any namespaces if not explicetly mentioned in the `namespaces` list, to let a user access to everything in any namespaces (like in a dev env) use `allowAll: true`
 
 ```yaml
 version: sshjump.inair.space/v1
@@ -73,7 +76,30 @@ permissions:
   allowAll: true
 ```
 
+To open access to a full namespace, just list the namespace without pod name.
+```yaml
+version: sshjump.inair.space/v1
+
+permissions:
+- username: "bob"
+  authorizedKey: "ssh-ed25519 AAAAAasasasasas bob@sponge.net"
+  namespaces:
+  - namespace: "projecta"
+```
 ## Features
+
+
+
+
+
+## Image Build
+
+This repo is using [`ko`](https://ko.build):
+```sh
+KO_DOCKER_REPO=ghcr.io/akhenakh/sshjump ko build ./cmd/sshjump
+```
+
+There is a `Dockerfile` to be used with Docker & Podman too.
 
 
 ## TODO
