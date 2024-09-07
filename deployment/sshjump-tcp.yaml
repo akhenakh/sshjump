@@ -1,0 +1,16 @@
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  annotations:
+  name: sshjump-routes
+  namespace: sshjump
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: eg
+    namespace: envoy-gateway-system
+  rules:
+  - backendRefs:
+    - name: sshjump
+      port: 2222

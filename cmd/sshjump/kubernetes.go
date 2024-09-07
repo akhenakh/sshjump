@@ -50,12 +50,17 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (des
 
 	// Iterate through the services and print their names and ports
 	for _, service := range services.Items {
+		var addr string
+		if len(service.Spec.ClusterIPs) > 0 {
+			addr = service.Spec.ClusterIPs[0]
+		}
+
 		for _, port := range service.Spec.Ports {
 			cps = append(cps, destPort{
 				namespace: service.Namespace,
 				service:   service.Name,
 				port:      port.Port,
-				addr:      service.Status.LoadBalancer.Ingress[0].IP,
+				addr:      addr,
 			})
 		}
 	}

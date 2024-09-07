@@ -12,36 +12,63 @@ SSHJump uses SSH public key authentication to validate users and permissions.
 Use SSH local forward to forward any ports from the cluster:
 
 ```sh
-ssh -L8080:nginx:8080 -p 2222 k8s.cluster.domain.tld
+ssh -L8080:argocd.argocd-server:8080 -p 2222 myk8s.cluster.domain.tld
 ```
-If you are authorized sshjump will connect your localhost port 8080 to the first running pod named `nginx`.
+If you are authorized sshjump will connect your localhost port 8080 to the first running pod named `nginx` the namespace `nginx`.
 
 ### Target Selection
 
-You can chose between services and containers using the prefixes `srv` or `container`, if you avoir prefix, it defaults to container.
+You can chose between services and pods using the prefixes `srv` or `pod`, if you don't set a prefix, it defaults to pods.
 
 Will forward to the `nginx` Kubernetes service.
 ```sh
-ssh -L8080:srv.nginx:8080 -p 2222 k8s.cluster.domain.tld
+ssh -L8080:srv.nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
-Will forward to the first container named `nginx` Kubernetes service.
+Will forward to the first pod named `nginx` Kubernetes service.
 ```sh
-ssh -L8080:container.nginx:8080 -p 2222 k8s.cluster.domain.tld
+ssh -L8080:nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
 You can specify the namespace by prefixing the forward address with the namespace.
 ```sh
-ssh -L8080:myproject.srv.nginx:8080 -p 2222 k8s.cluster.domain.tld
+ssh -L8080:srv.mynamespace.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
 ## Installation
 
-SSHJump is mainly intended to run from inside a Kubernetes cluster but can be used running outside, simply pointing it to a kube config.
+SSHJump requires read access to the Kubernetes API to list services and pods.
+
+```sh
+kubectl create ns sshjump
+kubectl apply -f deployment/sshjump-serviceaccount.yaml
+```
+
+A config file with the SSH keys is passed to SSHJump using a configmap, edit the file to add your users then apply it to Kubernetes.
+
+```sh
+kubectl apply -f deployment/sshjump-configmap.yaml
+```
+
+Deploy the app.
+
+```sh
+kubectl apply -f deployment/sshjump-deployment.yaml
+```
+
+Finally you need to open a TCP port to SSHJump (This example use the Gateway API and Envoy):
+
+```sh
+kubectl apply -f deployment/sshjump-tcp.yaml
+```
+
+### Outside Kubernetes
+
+SSHJump is intended to run from inside a Kubernetes cluster but can be used running outside, simply pointing it to a kube config.
 
 If `KUBE_CONFIG_PATH` env variable is set to a `﻿.kube/config` SSHJump will use it to connect the Kubernetes API.
 
-
+This is mainly for development purpose and testing.
 
 ## Config file
 
@@ -96,7 +123,7 @@ permissions:
 
 This repo is using [`ko`](https://ko.build):
 ```sh
-KO_DOCKER_REPO=ghcr.io/akhenakh/sshjump ko build ./cmd/sshjump
+KO_DOCKER_REPO=ghcr.io/akhenakh/sshjump ko build --platform=linux/amd64,linux/arm64  --bare ./cmd/sshjump
 ```
 
 There is a `Dockerfile` to be used with Docker & Podman too.

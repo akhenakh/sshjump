@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
@@ -111,6 +113,7 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 
 	if s.LocalPortForwardingCallback == nil || !s.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
 		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
+
 		return
 	}
 
@@ -118,50 +121,88 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 	if err != nil {
 		newChan.Reject(gossh.ConnectionFailed, "error querying Kubernetes api: "+err.Error())
 
+		srv.logger.Debug("error querying Kubernetes API",
+			"error", err.Error(),
+			"user", ctx.User(),
+			"host", d.DestAddr,
+			"port", d.DestPort,
+		)
+
 		return
 	}
 
 	var addr string
-	// test for service request
-	if strings.HasPrefix(d.DestAddr, "srv.") {
+	// test for service request: srv.namespace.servicename
+	if strings.HasPrefix(d.DestAddr, "svc.") {
 		ds := strings.Split(d.DestAddr, ".")
-		if len(ds) != 4 {
-			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes destination")
+		if len(ds) != 3 {
+			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
 
 			return
 		}
 		namespace := ds[1]
 		service := ds[2]
-		addr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
+		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
 		if !ok {
 			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
 
+			srv.logger.Warn("destination not authorized",
+				"user", ctx.User(),
+				"host", d.DestAddr,
+				"port", d.DestPort,
+			)
+
 			return
 		}
-		addr = addr
+		addr = daddr
 	} else {
 
 		ds := strings.Split(d.DestAddr, ".")
-		if len(ds) != 3 {
-			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes destination")
+		if len(ds) != 2 {
+			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
 
 			return
 		}
 		namespace := ds[0]
 		service := ds[1]
-		addr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
+		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
 		if !ok {
 			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
 
+			srv.logger.Warn("destination not authorized",
+				"user", ctx.User(),
+				"host", d.DestAddr,
+				"port", d.DestPort,
+			)
+
 			return
 		}
-		addr = addr
+		addr = daddr
 	}
 
+	srv.logger.Debug("forward in progress",
+		"user", ctx.User(),
+		"host", d.DestAddr,
+		"port", d.DestPort,
+		"addr", addr,
+	)
+
+	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	var dialer net.Dialer
-	dconn, err := dialer.DialContext(ctx, "tcp", addr)
+	dconn, err := dialer.DialContext(dctx, "tcp", addr)
 	if err != nil {
-		newChan.Reject(gossh.ConnectionFailed, err.Error())
+		newChan.Reject(gossh.ConnectionFailed, fmt.Sprintf("%s while connecting to %s", err.Error(), addr))
+
+		srv.logger.Warn("connection error",
+			"error", err.Error(),
+			"user", ctx.User(),
+			"host", d.DestAddr,
+			"port", d.DestPort,
+			"addr", addr,
+		)
+
 		return
 	}
 

@@ -70,7 +70,7 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 func main() {
 	type EnvConfig struct {
 		LogLevel       string `env:"LOG_LEVEL" envDefault:"INFO"`
-		ConfigFile     string `env:"CONFIG_FILE" envDefault:"sshjump.yaml"`
+		ConfigPath     string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
 		Host           string `env:"HOST" envDefault:"0.0.0.0"`
 		Port           int    `env:"PORT" envDefault:"2222"`
 		HealthPort     int    `env:"HEALTH_PORT" envDefault:"6666"`
@@ -99,16 +99,16 @@ func main() {
 		programLevel.Set(slog.LevelError)
 	}
 
-	f, err := os.ReadFile(envCfg.ConfigFile)
+	f, err := os.ReadFile(envCfg.ConfigPath)
 	if err != nil {
-		logger.Error("can't open config file", "err", err, "path", envCfg.ConfigFile)
+		logger.Error("can't open config file", "err", err, "path", envCfg.ConfigPath)
 		os.Exit(1)
 	}
 
 	var cfg SSHJumpConfig
 
 	if err := yaml.Unmarshal(f, &cfg); err != nil {
-		logger.Error("can't unmarshal yaml config file", "err", err, "path", envCfg.ConfigFile)
+		logger.Error("can't unmarshal yaml config file", "err", err, "path", envCfg.ConfigPath)
 		os.Exit(1)
 	}
 

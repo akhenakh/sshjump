@@ -1,0 +1,65 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sshjump
+  namespace: sshjump
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sshjump
+  template:
+    metadata:
+      labels:
+        app: sshjump
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/port: '8888'
+    spec:
+      serviceAccountName: sshjump-reader-sa
+      containers:
+      - name: sshjump
+        image: akhenakh/sshjump:1.0
+        env:
+        - name: LOG_LEVEL
+          value: DEBUG
+        - name: HEALTH_PORT
+          value: "6666"
+        - name: CONFIG_PATH
+          value: /app/config/config.yaml
+        ports:
+          - containerPort: 8888
+            name: http-metrics
+          - containerPort: 2222
+            name: ssh
+        livenessProbe:
+          grpc:
+            port: 6666
+          initialDelaySeconds: 2
+          periodSeconds: 4
+        readinessProbe:
+          grpc:
+            port: 6666
+          initialDelaySeconds: 2
+          periodSeconds: 4
+        volumeMounts:
+        - name: config-volume
+          mountPath: /app/config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: sshjump-config-cm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sshjump
+  namespace: sshjump
+spec:
+  selector:
+    app: sshjump
+  ports:
+    - protocol: TCP
+      name: "ssh"
+      port: 2222
+      targetPort: 2222
