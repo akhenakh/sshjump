@@ -7,9 +7,14 @@ SSHJump uses SSH public key authentication to validate users and permissions.
 
 ![SSH Jump kangaroo logo](img/sshjump512.png?raw=true "SSH Jump logo")
 
+## Why?
+- You don't want to give Kubernetes API access to your users for the sole purpose of TCP forward, provisioning a new user with SSHjump is basically adding a user and a key.
+- Your Kubernetes cluster may not have its API exposed publically, as a good security measure, attack surface is lowered by just exposing SSHJump access.
+
+
 ## Usage
 
-Use SSH local forward to forward any ports from the cluster:
+Use regular SSH local forward to forward any ports from the cluster, providing the namespace and services/pods in the address:
 
 ```sh
 ssh -L8080:argocd.argocd-server:8080 -p 2222 myk8s.cluster.domain.tld
@@ -44,7 +49,12 @@ kubectl create ns sshjump
 kubectl apply -f deployment/sshjump-serviceaccount.yaml
 ```
 
-A config file with the SSH keys is passed to SSHJump using a configmap, edit the file to add your users then apply it to Kubernetes.
+A config file with the users SSH keys and host key is passed to SSHJump using a configmap, edit the file to add your users then apply it to Kubernetes.
+
+To generate your host key:
+```sh
+ssh-keygen -t rsa -f ssh_host_rsa_key -N ""
+```
 
 ```sh
 kubectl apply -f deployment/sshjump-configmap.yaml
@@ -113,6 +123,12 @@ permissions:
   namespaces:
   - namespace: "projecta"
 ```
+## Tailscale
+
+It's possible to join your tailscale network by providing a ts auth key.
+
+Pass the key in a file (from secret or configmaps) using the env variable `TS_AUTHKEY_PATH`.
+
 ## Features
 
 
@@ -136,9 +152,11 @@ There is a `Dockerfile` to be used with Docker & Podman too.
 - [ ] Jumphost ssh
 - [ ] TUI
 - [ ] OTP
-- [ ] logs
+- [X] logs
+- [X] user tunnel connection metric
 - [ ] allow/deny metrics
 - [ ] reload config on changes
 - [ ] config map example
-- [ ] kubernetes example
+- [X] kubernetes example
 - [ ] helm example
+- [X] tailscale

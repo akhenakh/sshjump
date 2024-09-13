@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"log/slog"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
+	"tailscale.com/tsnet"
 )
 
 var (
@@ -82,6 +84,7 @@ func main() {
 		HealthPort      int    `env:"HEALTH_PORT" envDefault:"6666"`
 		HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
 		KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
+		TSAuthKeyPath   string `env:"TS_AUTHKEY_PATH"`
 	}
 
 	// TODO: reload config on changes
@@ -217,13 +220,40 @@ func main() {
 
 	// ssh server
 	g.Go(func() error {
-		l, err := net.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
-		if err != nil {
-			return err
+		var ln net.Listener
+
+		// Starting Tailscale if key is present
+		if envCfg.TSAuthKeyPath != "" {
+			key, err := ioutil.ReadFile(envCfg.TSAuthKeyPath)
+			if err != nil {
+				return err
+			}
+
+			host := fmt.Sprintf("sshjump-%s", "todo-generate-clustername")
+			srv := &tsnet.Server{
+				AuthKey:   string(key),
+				Ephemeral: true,
+				Hostname:  host,
+			}
+
+			logger.Info("starting ssh server", "port", envCfg.Port, "tail", host)
+
+			l, err := srv.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
+			if err != nil {
+				return err
+			}
+			ln = l
+		} else {
+			l, err := net.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
+			if err != nil {
+				return err
+			}
+			ln = l
 		}
+
 		logger.Info("starting ssh server", "port", envCfg.Port)
 
-		if err := s.Serve(l); err != nil && err != ssh.ErrServerClosed {
+		if err := s.Serve(ln); err != nil && err != ssh.ErrServerClosed {
 			return err
 		}
 
