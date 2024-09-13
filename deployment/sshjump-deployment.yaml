@@ -13,38 +13,40 @@ spec:
       labels:
         app: sshjump
       annotations:
-        prometheus.io/scrape: 'true'
-        prometheus.io/port: '8888'
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
     spec:
       serviceAccountName: sshjump-reader-sa
       containers:
-      - name: sshjump
-        image: akhenakh/sshjump:1.0
-        env:
-        - name: LOG_LEVEL
-          value: DEBUG
-        - name: HEALTH_PORT
-          value: "6666"
-        - name: CONFIG_PATH
-          value: /app/config/config.yaml
-        ports:
-          - containerPort: 8888
-            name: http-metrics
-          - containerPort: 2222
-            name: ssh
-        livenessProbe:
-          grpc:
-            port: 6666
-          initialDelaySeconds: 2
-          periodSeconds: 4
-        readinessProbe:
-          grpc:
-            port: 6666
-          initialDelaySeconds: 2
-          periodSeconds: 4
-        volumeMounts:
-        - name: config-volume
-          mountPath: /app/config
+        - name: sshjump
+          image: akhenakh/sshjump:1.0
+          env:
+            - name: LOG_LEVEL
+              value: DEBUG
+            - name: HEALTH_PORT
+              value: "6666"
+            - name: CONFIG_PATH
+              value: /app/config/config.yaml
+            - name: PRIVATE_KEY_PATH
+              value: /app/config/ssh_host_rsa_key
+          ports:
+            - containerPort: 8888
+              name: http-metrics
+            - containerPort: 2222
+              name: ssh
+          livenessProbe:
+            grpc:
+              port: 6666
+            initialDelaySeconds: 2
+            periodSeconds: 4
+          readinessProbe:
+            grpc:
+              port: 6666
+            initialDelaySeconds: 2
+            periodSeconds: 4
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
       volumes:
         - name: config-volume
           configMap:

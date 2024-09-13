@@ -42,7 +42,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (des
 		}
 	}
 
-	// Get the list of services in the default namespace
+	// Get the list of services in all namespaces
 	services, err := srv.clientset.CoreV1().Services("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("can't fetch services list %w", err)

@@ -17,3 +17,7 @@ data:
         - name: "benthos"
           ports:
             - 8080
+  key.rsa: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    XXXXX
+    -----END OPENSSH PRIVATE KEY-----

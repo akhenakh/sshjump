@@ -12,6 +12,7 @@ import (
 
 	"github.com/caarlos0/env/v11"
 	"github.com/gliderlabs/ssh"
+	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
@@ -73,6 +74,7 @@ func main() {
 		ConfigPath     string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
 		Host           string `env:"HOST" envDefault:"0.0.0.0"`
 		Port           int    `env:"PORT" envDefault:"2222"`
+		PrivateKeyPath string `env:"PRIVATE_KEY_PATH" envDefault:"key.sa"`
 		HealthPort     int    `env:"HEALTH_PORT" envDefault:"6666"`
 		KubeConfigPath string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
 	}
@@ -174,7 +176,20 @@ func main() {
 		return grpcHealthServer.Serve(hln)
 	})
 
-	s := NewServer(logger, keys, clientset)
+	// reading private key
+	pemBytes, err := os.ReadFile(envCfg.PrivateKeyPath)
+	if err != nil {
+		logger.Error("can't read private key", "error", err)
+		os.Exit(2)
+	}
+
+	key, err := gossh.ParsePrivateKey(pemBytes)
+	if err != nil {
+		logger.Error("can't parse private key", "error", err)
+		os.Exit(2)
+	}
+
+	s := NewServer(logger, key, keys, clientset)
 
 	// ssh server
 	g.Go(func() error {

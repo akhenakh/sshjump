@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log/slog"
 	"net"
 	"strings"
@@ -13,6 +14,12 @@ import (
 	"github.com/gliderlabs/ssh"
 	gossh "golang.org/x/crypto/ssh"
 	"k8s.io/client-go/kubernetes"
+)
+
+var (
+	// TODO: parametrize
+	DeadlineTimeout = 30 * time.Second
+	IdleTimeout     = 10 * time.Second
 )
 
 type Server struct {
@@ -33,7 +40,7 @@ type localForwardChannelData struct {
 	OriginPort uint32
 }
 
-func NewServer(logger *slog.Logger, keys map[string]Permission, clientset *kubernetes.Clientset) *Server {
+func NewServer(logger *slog.Logger, privateKey gossh.Signer, keys map[string]Permission, clientset *kubernetes.Clientset) *Server {
 	s := &Server{
 		logger:      logger,
 		permissions: keys,
@@ -51,7 +58,11 @@ func NewServer(logger *slog.Logger, keys map[string]Permission, clientset *kuber
 			"direct-tcpip": s.DirectTCPIPHandler,
 			"session":      ssh.DefaultSessionHandler,
 		},
+		MaxTimeout:  DeadlineTimeout,
+		IdleTimeout: IdleTimeout,
 	}
+
+	s.AddHostKey(privateKey)
 
 	publicKeyOption := ssh.PublicKeyAuth(s.PublicKeyHandler)
 	sshServer.SetOption(publicKeyOption)
@@ -223,4 +234,13 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 		defer dconn.Close()
 		io.Copy(dconn, ch)
 	}()
+}
+
+func ReadPrivateKeyFromFile(path string) (ssh.Signer, error) {
+	keyBytes, err := ioutil.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	return key, nil
 }
