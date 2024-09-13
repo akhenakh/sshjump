@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log/slog"
 	"net"
 	"strings"
@@ -62,7 +61,7 @@ func NewServer(logger *slog.Logger, privateKey gossh.Signer, keys map[string]Per
 		IdleTimeout: IdleTimeout,
 	}
 
-	s.AddHostKey(privateKey)
+	sshServer.AddHostKey(privateKey)
 
 	publicKeyOption := ssh.PublicKeyAuth(s.PublicKeyHandler)
 	sshServer.SetOption(publicKeyOption)
@@ -77,6 +76,7 @@ func (srv *Server) Handler(s ssh.Session) {
 		"username", s.User(),
 		"ip", s.RemoteAddr().String(),
 	)
+	userConnections.WithLabelValues(s.User()).Inc()
 	io.WriteString(s, fmt.Sprintf("user %s\n", s.User()))
 	select {}
 }
@@ -198,6 +198,8 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 		"addr", addr,
 	)
 
+	userTunnels.WithLabelValues(ctx.User()).Inc()
+
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
@@ -234,13 +236,4 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 		defer dconn.Close()
 		io.Copy(dconn, ch)
 	}()
-}
-
-func ReadPrivateKeyFromFile(path string) (ssh.Signer, error) {
-	keyBytes, err := ioutil.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	return key, nil
 }

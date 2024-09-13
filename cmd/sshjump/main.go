@@ -5,13 +5,16 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/gliderlabs/ssh"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	gossh "golang.org/x/crypto/ssh"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
@@ -24,8 +27,9 @@ import (
 )
 
 var (
-	grpcHealthServer *grpc.Server
-	sshServer        *ssh.Server
+	grpcHealthServer  *grpc.Server
+	sshServer         *ssh.Server
+	httpMetricsServer *http.Server
 )
 
 // readKeys reads all the keys from the config file
@@ -70,13 +74,14 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 
 func main() {
 	type EnvConfig struct {
-		LogLevel       string `env:"LOG_LEVEL" envDefault:"INFO"`
-		ConfigPath     string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
-		Host           string `env:"HOST" envDefault:"0.0.0.0"`
-		Port           int    `env:"PORT" envDefault:"2222"`
-		PrivateKeyPath string `env:"PRIVATE_KEY_PATH" envDefault:"key.sa"`
-		HealthPort     int    `env:"HEALTH_PORT" envDefault:"6666"`
-		KubeConfigPath string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
+		LogLevel        string `env:"LOG_LEVEL" envDefault:"INFO"`
+		ConfigPath      string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
+		Host            string `env:"HOST" envDefault:"0.0.0.0"`
+		Port            int    `env:"PORT" envDefault:"2222"`
+		PrivateKeyPath  string `env:"PRIVATE_KEY_PATH" envDefault:"ssh_host_rsa_key"`
+		HealthPort      int    `env:"HEALTH_PORT" envDefault:"6666"`
+		HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
+		KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
 	}
 
 	// TODO: reload config on changes
@@ -191,6 +196,25 @@ func main() {
 
 	s := NewServer(logger, key, keys, clientset)
 
+	// web server metrics
+	g.Go(func() error {
+		httpMetricsServer = &http.Server{
+			Addr:         fmt.Sprintf(":%d", envCfg.HTTPMetricsPort),
+			ReadTimeout:  10 * time.Second,
+			WriteTimeout: 10 * time.Second,
+		}
+		logger.Info(fmt.Sprintf("HTTP Metrics server listening at :%d", envCfg.HTTPMetricsPort))
+
+		// Register Prometheus metrics handler.
+		http.Handle("/metrics", promhttp.Handler())
+
+		if err := httpMetricsServer.ListenAndServe(); err != http.ErrServerClosed {
+			return err
+		}
+
+		return nil
+	})
+
 	// ssh server
 	g.Go(func() error {
 		l, err := net.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
@@ -218,6 +242,13 @@ func main() {
 	slog.Warn("received shutdown signal")
 
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	if httpMetricsServer != nil {
+		_ = httpMetricsServer.Shutdown(shutdownCtx)
+	}
 
 	if grpcHealthServer != nil {
 		grpcHealthServer.GracefulStop()
