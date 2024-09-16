@@ -10,7 +10,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gliderlabs/ssh"
+	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
+	"github.com/charmbracelet/wish/activeterm"
+	"github.com/charmbracelet/wish/bubbletea"
+	"github.com/charmbracelet/wish/logging"
 	gossh "golang.org/x/crypto/ssh"
 	"k8s.io/client-go/kubernetes"
 )
@@ -40,35 +44,44 @@ type localForwardChannelData struct {
 }
 
 func NewServer(logger *slog.Logger, privateKey gossh.Signer, keys map[string]Permission, clientset *kubernetes.Clientset) *Server {
-	s := &Server{
+	jumps := &Server{
 		logger:      logger,
 		permissions: keys,
 		clientset:   clientset,
 	}
-	sshServer = &ssh.Server{
-		Handler: s.Handler,
-		Banner:  "SSHJump\n",
-		LocalPortForwardingCallback: ssh.LocalPortForwardingCallback(func(ctx ssh.Context, dhost string, dport uint32) bool {
-			slog.Debug("Accepted forward", "host", dhost, "port", dport, "user", ctx.User())
 
-			return true
-		}),
-		ChannelHandlers: map[string]ssh.ChannelHandler{
-			"direct-tcpip": s.DirectTCPIPHandler,
-			"session":      ssh.DefaultSessionHandler,
+	sshServer, _ := wish.NewServer(
+		wish.WithMiddleware(
+			bubbletea.Middleware(teaHandler),
+			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
+			logging.Middleware(),
+		),
+		func(s *ssh.Server) error {
+			s.LocalPortForwardingCallback = func(ctx ssh.Context, bindHost string, bindPort uint32) bool {
+				slog.Debug("Accepted forward", "host", bindHost, "port", bindPort, "user", ctx.User())
+
+				return true
+			}
+			s.ChannelHandlers = map[string]ssh.ChannelHandler{
+				"direct-tcpip": jumps.DirectTCPIPHandler,
+				"session":      ssh.DefaultSessionHandler,
+			}
+
+			s.MaxTimeout = DeadlineTimeout
+			s.IdleTimeout = IdleTimeout
+			s.AddHostKey(privateKey)
+
+			publicKeyOption := ssh.PublicKeyAuth(jumps.PublicKeyHandler)
+
+			s.SetOption(publicKeyOption)
+
+			return nil
 		},
-		MaxTimeout:  DeadlineTimeout,
-		IdleTimeout: IdleTimeout,
-	}
+	)
 
-	sshServer.AddHostKey(privateKey)
+	jumps.Server = sshServer
 
-	publicKeyOption := ssh.PublicKeyAuth(s.PublicKeyHandler)
-	sshServer.SetOption(publicKeyOption)
-
-	s.Server = sshServer
-
-	return s
+	return jumps
 }
 
 func (srv *Server) Handler(s ssh.Session) {

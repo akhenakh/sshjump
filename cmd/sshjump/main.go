@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/caarlos0/env/v11"
+	"github.com/charmbracelet/keygen"
 	"github.com/gliderlabs/ssh"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	gossh "golang.org/x/crypto/ssh"
@@ -184,20 +185,39 @@ func main() {
 		return grpcHealthServer.Serve(hln)
 	})
 
-	// reading private key
-	pemBytes, err := os.ReadFile(envCfg.PrivateKeyPath)
-	if err != nil {
-		logger.Error("can't read private key", "error", err)
-		os.Exit(2)
+	var signer gossh.Signer
+
+	// no key provided generate one
+	if envCfg.PrivateKeyPath == "" {
+		k, err := keygen.New("id_ed25519", keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
+		if err != nil {
+			logger.Error("can't generate private key", "error", err)
+			os.Exit(2)
+		}
+
+		gens, err := gossh.ParsePrivateKey(k.RawPrivateKey())
+		if err != nil {
+			logger.Error("can't parse generated private key", "error", err)
+			os.Exit(2)
+		}
+		signer = gens
+	} else {
+		// reading private key
+		pemBytes, err := os.ReadFile(envCfg.PrivateKeyPath)
+		if err != nil {
+			logger.Error("can't read private key", "error", err)
+			os.Exit(2)
+		}
+
+		locals, err := gossh.ParsePrivateKey(pemBytes)
+		if err != nil {
+			logger.Error("can't parse private key", "error", err)
+			os.Exit(2)
+		}
+		signer = locals
 	}
 
-	key, err := gossh.ParsePrivateKey(pemBytes)
-	if err != nil {
-		logger.Error("can't parse private key", "error", err)
-		os.Exit(2)
-	}
-
-	s := NewServer(logger, key, keys, clientset)
+	s := NewServer(logger, signer, keys, clientset)
 
 	// web server metrics
 	g.Go(func() error {

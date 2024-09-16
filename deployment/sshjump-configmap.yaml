@@ -17,6 +17,11 @@ data:
         - name: "benthos"
           ports:
             - 8080
+      - namespace: "sshjump"
+        services:
+        - name: "sshjump"
+          ports:
+            - 8888
   key.rsa: |
     -----BEGIN OPENSSH PRIVATE KEY-----
     XXXXX
