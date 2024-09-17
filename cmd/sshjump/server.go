@@ -37,7 +37,7 @@ type Server struct {
 	clientset     *kubernetes.Clientset
 	configWatcher *fsnotify.Watcher
 
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	permissions map[string]Permission
 }
 
@@ -108,9 +108,11 @@ func (srv *Server) Handler(s ssh.Session) {
 	select {}
 }
 
+// PermsForUser returns the permissions for a given user.
+// It locks the server mutex to ensure safe access to the permissions map.
 func (srv *Server) PermsForUser(user string) *Permission {
-	srv.mu.Lock()
-	defer srv.mu.Unlock()
+	srv.mu.RLock()
+	defer srv.mu.RUnlock()
 
 	// looking for a matching username
 	perm, ok := srv.permissions[user]
@@ -326,7 +328,7 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 				if !ok {
 					return
 				}
-				srv.logger.Error("error watching config file: %v", err)
+				srv.logger.Error("error watching config file: %v", err.Error())
 			}
 		}
 	}()
