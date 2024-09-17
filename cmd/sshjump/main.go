@@ -29,6 +29,18 @@ import (
 	"tailscale.com/tsnet"
 )
 
+type EnvConfig struct {
+	LogLevel        string `env:"LOG_LEVEL" envDefault:"INFO"`
+	ConfigPath      string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
+	Host            string `env:"HOST" envDefault:"0.0.0.0"`
+	Port            int    `env:"PORT" envDefault:"2222"`
+	PrivateKeyPath  string `env:"PRIVATE_KEY_PATH" envDefault:"ssh_host_rsa_key"`
+	HealthPort      int    `env:"HEALTH_PORT" envDefault:"6666"`
+	HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
+	KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
+	TSAuthKeyPath   string `env:"TS_AUTHKEY_PATH"`
+}
+
 var (
 	grpcHealthServer  *grpc.Server
 	sshServer         *ssh.Server
@@ -76,17 +88,6 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 }
 
 func main() {
-	type EnvConfig struct {
-		LogLevel        string `env:"LOG_LEVEL" envDefault:"INFO"`
-		ConfigPath      string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
-		Host            string `env:"HOST" envDefault:"0.0.0.0"`
-		Port            int    `env:"PORT" envDefault:"2222"`
-		PrivateKeyPath  string `env:"PRIVATE_KEY_PATH" envDefault:"ssh_host_rsa_key"`
-		HealthPort      int    `env:"HEALTH_PORT" envDefault:"6666"`
-		HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
-		KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
-		TSAuthKeyPath   string `env:"TS_AUTHKEY_PATH"`
-	}
 
 	// TODO: reload config on changes
 
@@ -95,20 +96,7 @@ func main() {
 		fmt.Println(err)
 	}
 
-	programLevel := new(slog.LevelVar)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel}))
-	slog.SetDefault(logger)
-
-	switch strings.ToUpper(envCfg.LogLevel) {
-	case "DEBUG":
-		programLevel.Set(slog.LevelDebug)
-	case "INFO":
-		programLevel.Set(slog.LevelInfo)
-	case "WARN":
-		programLevel.Set(slog.LevelWarn)
-	case "ERROR":
-		programLevel.Set(slog.LevelError)
-	}
+	logger := createLogger(envCfg)
 
 	f, err := os.ReadFile(envCfg.ConfigPath)
 	if err != nil {
@@ -126,35 +114,14 @@ func main() {
 	keys := readKeys(logger, cfg)
 
 	if len(keys) == 0 {
+		logger.Error("configuration is empty, aborting", "path", envCfg.ConfigPath)
+		os.Exit(1)
 	}
 
 	ctx := context.Background()
 	ctx, cancel := context.WithCancel(ctx)
 
-	kubeConfig := &rest.Config{}
-	if envCfg.KubeConfigPath != "" {
-		// use the current context in kubeconfig
-		config, err := clientcmd.BuildConfigFromFlags("", envCfg.KubeConfigPath)
-		if err != nil {
-			logger.Error("can't create kubernetes config from path",
-				"error", err,
-				"path", envCfg.KubeConfigPath,
-			)
-			os.Exit(1)
-		}
-		kubeConfig = config
-	} else {
-		// creates the in-cluster Kubernetes config
-		config, err := rest.InClusterConfig()
-		if err != nil {
-			logger.Error("can't create kubernetes config from within cluster", "error", err)
-			os.Exit(1)
-		}
-		kubeConfig = config
-	}
-
-	// creates a new clientset
-	clientset, err := kubernetes.NewForConfig(kubeConfig)
+	clientset, err := createKubeClient(envCfg, logger)
 	if err != nil {
 		logger.Error("can't create kubernetes client", "error", err)
 		os.Exit(1)
@@ -185,37 +152,7 @@ func main() {
 		return grpcHealthServer.Serve(hln)
 	})
 
-	var signer gossh.Signer
-
-	// no key provided generate one
-	if envCfg.PrivateKeyPath == "" {
-		k, err := keygen.New("id_ed25519", keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
-		if err != nil {
-			logger.Error("can't generate private key", "error", err)
-			os.Exit(2)
-		}
-
-		gens, err := gossh.ParsePrivateKey(k.RawPrivateKey())
-		if err != nil {
-			logger.Error("can't parse generated private key", "error", err)
-			os.Exit(2)
-		}
-		signer = gens
-	} else {
-		// reading private key
-		pemBytes, err := os.ReadFile(envCfg.PrivateKeyPath)
-		if err != nil {
-			logger.Error("can't read private key", "error", err)
-			os.Exit(2)
-		}
-
-		locals, err := gossh.ParsePrivateKey(pemBytes)
-		if err != nil {
-			logger.Error("can't parse private key", "error", err)
-			os.Exit(2)
-		}
-		signer = locals
-	}
+	signer, err := createSigner(envCfg, logger)
 
 	s := NewServer(logger, signer, keys, clientset)
 
@@ -313,4 +250,78 @@ func main() {
 		slog.Error("server returning an error", "error", err)
 		os.Exit(1)
 	}
+}
+
+func createSigner(envCfg EnvConfig, logger *slog.Logger) (gossh.Signer, error) {
+	// no key provided generate one
+	if envCfg.PrivateKeyPath == "" {
+		k, err := keygen.New("id_ed25519", keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
+		if err != nil {
+			return nil, fmt.Errorf("can't generate private key: %w", err)
+		}
+
+		gens, err := gossh.ParsePrivateKey(k.RawPrivateKey())
+		if err != nil {
+			return nil, fmt.Errorf("can't parse generated private key: %w", err)
+		}
+		return gens, nil
+	}
+	// reading private key
+	pemBytes, err := os.ReadFile(envCfg.PrivateKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("can't read private key: %w", err)
+	}
+
+	locals, err := gossh.ParsePrivateKey(pemBytes)
+	if err != nil {
+		return nil, fmt.Errorf("can't parse private key: %w", err)
+
+	}
+
+	return locals, nil
+}
+
+func createKubeClient(envCfg EnvConfig, logger *slog.Logger) (*kubernetes.Clientset, error) {
+	var kubeConfig *rest.Config
+	if envCfg.KubeConfigPath != "" {
+		// use the current context in kubeconfig
+		config, err := clientcmd.BuildConfigFromFlags("", envCfg.KubeConfigPath)
+		if err != nil {
+			logger.Error("can't create kubernetes config from path",
+				"error", err,
+				"path", envCfg.KubeConfigPath,
+			)
+			os.Exit(1)
+		}
+		kubeConfig = config
+	} else {
+		// creates the in-cluster Kubernetes config
+		config, err := rest.InClusterConfig()
+		if err != nil {
+			logger.Error("can't create kubernetes config from within cluster", "error", err)
+			os.Exit(1)
+		}
+		kubeConfig = config
+	}
+
+	// creates a new clientset
+	return kubernetes.NewForConfig(kubeConfig)
+}
+
+func createLogger(envCfg EnvConfig) *slog.Logger {
+	programLevel := new(slog.LevelVar)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel}))
+	slog.SetDefault(logger)
+
+	switch strings.ToUpper(envCfg.LogLevel) {
+	case "DEBUG":
+		programLevel.Set(slog.LevelDebug)
+	case "INFO":
+		programLevel.Set(slog.LevelInfo)
+	case "WARN":
+		programLevel.Set(slog.LevelWarn)
+	case "ERROR":
+		programLevel.Set(slog.LevelError)
+	}
+	return logger
 }

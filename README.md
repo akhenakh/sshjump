@@ -1,7 +1,9 @@
 
 # SSHJump
 
-A Kubernetes port forwarder using SSH and a nice TUI.
+WORK IN PROGRESS, NOT READY FOR PRODUCTION
+
+A Kubernetes (first but not only) port forwarder using SSH and a nice TUI.
 
 SSHJump uses SSH public key authentication to validate users and permissions.
 
@@ -23,7 +25,7 @@ If you are authorized sshjump will connect your localhost port 8080 to the first
 
 ### Target Selection
 
-You can chose between services and pods using the prefixes `srv` or `pod`, if you don't set a prefix, it defaults to pods.
+You can choose between services and pods using the prefixes `srv` or `pod`, if you don't set a prefix, it defaults to pods.
 
 Will forward to the `nginx` Kubernetes service.
 ```sh
@@ -102,7 +104,7 @@ permissions:
         - 6379
 ```
 
-By default SSHJump will deny access to any namespaces if not explicetly mentioned in the `namespaces` list, to let a user access to everything in any namespaces (like in a dev env) use `allowAll: true`
+By default SSHJump will deny access to any namespaces if not explicitly mentioned in the `namespaces` list, to let a user access to everything in any namespaces (like in a dev env) use `allowAll: true`
 
 ```yaml
 version: sshjump.inair.space/v1
@@ -125,12 +127,11 @@ permissions:
 ```
 ## Tailscale
 
-It's possible to join your tailscale network by providing a ts auth key.
+It's possible to join your tailnet by providing a ts auth key.
 
 Pass the key in a file (from secret or configmaps) using the env variable `TS_AUTHKEY_PATH`.
 
 ## Features
-
 
 
 
@@ -144,6 +145,9 @@ KO_DOCKER_REPO=ghcr.io/akhenakh/sshjump ko build --platform=linux/amd64,linux/ar
 
 There is a `Dockerfile` to be used with Docker & Podman too.
 
+## Community
+
+#sshjump on [Libera Network](https://libera.chat)
 
 ## TODO
 
@@ -160,3 +164,4 @@ There is a `Dockerfile` to be used with Docker & Podman too.
 - [X] kubernetes example
 - [ ] helm example
 - [X] tailscale
+- [ ] network policies
