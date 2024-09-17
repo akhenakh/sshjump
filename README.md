@@ -76,7 +76,7 @@ Deploy the app.
 kubectl apply -f deployment/sshjump-deployment.yaml
 ```
 
-Finally you need to open a TCP port to SSHJump (This example use the Gateway API and Envoy):
+Finally, you need to open a TCP port to SSHJump (This example use the Gateway API and Envoy):
 
 ```sh
 kubectl apply -f deployment/sshjump-tcp.yaml
@@ -167,7 +167,7 @@ There is a `Dockerfile` to be used with Docker & Podman too.
 - [X] logs
 - [X] user tunnel connection metric
 - [ ] allow/deny metrics
-- [ ] reload config on changes
+- [X] reload config on changes
 - [ ] config map example
 - [X] kubernetes example
 - [ ] helm example

@@ -34,7 +34,7 @@ type EnvConfig struct {
 	ConfigPath      string `env:"CONFIG_PATH" envDefault:"sshjump.yaml"`
 	Host            string `env:"HOST" envDefault:"0.0.0.0"`
 	Port            int    `env:"PORT" envDefault:"2222"`
-	PrivateKeyPath  string `env:"PRIVATE_KEY_PATH" envDefault:"ssh_host_rsa_key"`
+	PrivateKeyPath  string `env:"PRIVATE_KEY_PATH"`
 	HealthPort      int    `env:"HEALTH_PORT" envDefault:"6666"`
 	HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
 	KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file when running outside a cluster
@@ -47,46 +47,6 @@ var (
 	httpMetricsServer *http.Server
 )
 
-// readKeys reads all the keys from the config file
-// it does not break if some keys are invalid because
-// the same function is used to reload to file it changes
-// and the system needs to keep running.
-func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
-	m := make(map[string]Permission)
-	for i, perm := range cfg.Permissions {
-		if perm.Username == "" {
-			logger.Warn("invalid config no username", "index", i)
-
-			continue
-		}
-
-		// testing for username duplicates
-		if _, exist := m[perm.Username]; exist {
-			logger.Warn("duplicate username entry",
-				"username", perm.Username,
-				"index", i)
-
-			continue
-		}
-
-		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(perm.AuthorizedKey))
-		if err != nil {
-			logger.Warn("invalid key",
-				"error", err,
-				"username", perm.Username,
-				"key", perm.AuthorizedKey,
-				"index", i)
-
-			continue
-		}
-
-		perm.Key = key
-		m[perm.Username] = perm
-	}
-
-	return m
-}
-
 func main() {
 	var envCfg EnvConfig
 	if err := env.Parse(&envCfg); err != nil {
@@ -97,7 +57,7 @@ func main() {
 
 	keys, err := readPermission(logger, envCfg.ConfigPath)
 	if err != nil {
-		logger.Error("can't read permissions, aborting", "path", envCfg.ConfigPath)
+		logger.Error("can't read permissions, aborting", "path", envCfg.ConfigPath, "error", err)
 		os.Exit(1)
 	}
 
@@ -141,7 +101,7 @@ func main() {
 		return grpcHealthServer.Serve(hln)
 	})
 
-	signer, err := createSigner(envCfg, logger)
+	signer, err := createSigner(logger, envCfg)
 	if err != nil {
 		logger.Error("can't get valid host key", "error", err)
 		os.Exit(1)
@@ -232,19 +192,19 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
-	s.StopWatchConf()
-
 	if httpMetricsServer != nil {
 		_ = httpMetricsServer.Shutdown(shutdownCtx)
+	}
+
+	if sshServer != nil {
+		sshServer.Shutdown(ctx) //nolint:errcheck
 	}
 
 	if grpcHealthServer != nil {
 		grpcHealthServer.GracefulStop()
 	}
 
-	if sshServer != nil {
-		sshServer.Shutdown(ctx) //nolint:errcheck
-	}
+	s.StopWatchConf()
 
 	err = g.Wait()
 	if err != nil {
@@ -268,7 +228,7 @@ func readPermission(logger *slog.Logger, path string) (map[string]Permission, er
 	return readKeys(logger, cfg), nil
 }
 
-func createSigner(envCfg EnvConfig, logger *slog.Logger) (gossh.Signer, error) {
+func createSigner(logger *slog.Logger, envCfg EnvConfig) (gossh.Signer, error) {
 	// no key provided generate one
 	if envCfg.PrivateKeyPath == "" {
 		k, err := keygen.New("id_ed25519", keygen.WithKeyType(keygen.Ed25519), keygen.WithWrite())
@@ -280,6 +240,8 @@ func createSigner(envCfg EnvConfig, logger *slog.Logger) (gossh.Signer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("can't parse generated private key: %w", err)
 		}
+
+		logger.Warn("no host private key provided, generating ephemeral key")
 
 		return gens, nil
 	}
@@ -328,7 +290,10 @@ func createKubeClient(envCfg EnvConfig, logger *slog.Logger) (*kubernetes.Client
 
 func createLogger(envCfg EnvConfig) *slog.Logger {
 	programLevel := new(slog.LevelVar)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: programLevel}))
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+		AddSource: true,
+		Level:     programLevel,
+	}))
 	slog.SetDefault(logger)
 
 	switch strings.ToUpper(envCfg.LogLevel) {

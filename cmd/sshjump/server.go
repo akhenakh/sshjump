@@ -346,3 +346,43 @@ func (srv *Server) StopWatchConf() {
 		_ = srv.configWatcher.Close()
 	}
 }
+
+// readKeys reads all the keys from the config file
+// it does not break if some keys are invalid because
+// the same function is used to reload to file it changes
+// and the system needs to keep running.
+func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
+	m := make(map[string]Permission)
+	for i, perm := range cfg.Permissions {
+		if perm.Username == "" {
+			logger.Warn("invalid config no username", "index", i)
+
+			continue
+		}
+
+		// testing for username duplicates
+		if _, exist := m[perm.Username]; exist {
+			logger.Warn("duplicate username entry",
+				"username", perm.Username,
+				"index", i)
+
+			continue
+		}
+
+		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(perm.AuthorizedKey))
+		if err != nil {
+			logger.Warn("invalid key",
+				"error", err,
+				"username", perm.Username,
+				"key", perm.AuthorizedKey,
+				"index", i)
+
+			continue
+		}
+
+		perm.Key = key
+		m[perm.Username] = perm
+	}
+
+	return m
+}
