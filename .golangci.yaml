@@ -8,6 +8,8 @@ linters:
     - depguard
     - tagalign
     - mnd
+    - gci
+    - godox
   presets:
     - bugs
     - comment

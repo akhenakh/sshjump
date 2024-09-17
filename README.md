@@ -23,9 +23,17 @@ ssh -L8080:argocd.argocd-server:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 If you are authorized sshjump will connect your localhost port 8080 to the first running pod named `nginx` the namespace `nginx`.
 
-### Target Selection
+## Target Selection
 
-You can choose between services and pods using the prefixes `srv` or `pod`, if you don't set a prefix, it defaults to pods.
+### Dynamic with UI
+You can use the dynamic host selector:
+```sh
+ssh -L8080:sshjump:0 -p 2222 myk8s.cluster.domain.tld
+```
+It will display a UI in the terminal for you to select the target.
+
+### Static Target
+You can target specific services or pods using the  `srv` or `pod` prefixes, if you don't set a prefix, it defaults to pods.
 
 Will forward to the `nginx` Kubernetes service.
 ```sh

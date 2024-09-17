@@ -20,7 +20,7 @@ import (
 )
 
 var (
-	// TODO: parametrize
+	// TODO: parametrize.
 	DeadlineTimeout = 30 * time.Second
 	IdleTimeout     = 10 * time.Second
 )
@@ -34,7 +34,7 @@ type Server struct {
 	permissions map[string]Permission
 }
 
-// direct-tcpip data struct as specified in RFC4254, Section 7.2
+// direct-tcpip data struct as specified in RFC4254, Section 7.2.
 type localForwardChannelData struct {
 	DestAddr string
 	DestPort uint32
@@ -43,7 +43,12 @@ type localForwardChannelData struct {
 	OriginPort uint32
 }
 
-func NewServer(logger *slog.Logger, privateKey gossh.Signer, keys map[string]Permission, clientset *kubernetes.Clientset) *Server {
+func NewServer(
+	logger *slog.Logger,
+	privateKey gossh.Signer,
+	keys map[string]Permission,
+	clientset *kubernetes.Clientset,
+) *Server {
 	jumps := &Server{
 		logger:      logger,
 		permissions: keys,
@@ -52,7 +57,7 @@ func NewServer(logger *slog.Logger, privateKey gossh.Signer, keys map[string]Per
 
 	sshServer, _ := wish.NewServer(
 		wish.WithMiddleware(
-			bubbletea.Middleware(teaHandler),
+			bubbletea.Middleware(jumps.teaHandler),
 			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
 			logging.Middleware(),
 		),
@@ -125,11 +130,17 @@ func (srv *Server) PublicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 	return false
 }
 
-// DirectTCPIPHandler handles TCP forward
-func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, newChan gossh.NewChannel, ctx ssh.Context) {
+// DirectTCPIPHandler handles TCP forward.
+func (srv *Server) DirectTCPIPHandler(
+	s *ssh.Server,
+	conn *gossh.ServerConn,
+	newChan gossh.NewChannel,
+	ctx ssh.Context,
+) {
 	d := localForwardChannelData{}
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
+
 		return
 	}
 
@@ -180,7 +191,6 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 		}
 		addr = daddr
 	} else {
-
 		ds := strings.Split(d.DestAddr, ".")
 		if len(ds) != 2 {
 			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
@@ -235,18 +245,20 @@ func (srv *Server) DirectTCPIPHandler(s *ssh.Server, conn *gossh.ServerConn, new
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		dconn.Close()
+
 		return
 	}
+
 	go gossh.DiscardRequests(reqs)
 
 	go func() {
 		defer ch.Close()
 		defer dconn.Close()
-		io.Copy(ch, dconn)
+		_, _ = io.Copy(ch, dconn)
 	}()
 	go func() {
 		defer ch.Close()
 		defer dconn.Close()
-		io.Copy(dconn, ch)
+		_, _ = io.Copy(dconn, ch)
 	}()
 }

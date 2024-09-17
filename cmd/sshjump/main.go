@@ -37,7 +37,7 @@ type EnvConfig struct {
 	PrivateKeyPath  string `env:"PRIVATE_KEY_PATH" envDefault:"ssh_host_rsa_key"`
 	HealthPort      int    `env:"HEALTH_PORT" envDefault:"6666"`
 	HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
-	KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file if sshjump is running outside of a cluster
+	KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file when running outside a cluster
 	TSAuthKeyPath   string `env:"TS_AUTHKEY_PATH"`
 }
 
@@ -88,7 +88,6 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 }
 
 func main() {
-
 	// TODO: reload config on changes
 
 	var envCfg EnvConfig
@@ -153,6 +152,10 @@ func main() {
 	})
 
 	signer, err := createSigner(envCfg, logger)
+	if err != nil {
+		logger.Error("can't get valid host key", "error", err)
+		os.Exit(2)
+	}
 
 	s := NewServer(logger, signer, keys, clientset)
 
@@ -264,6 +267,7 @@ func createSigner(envCfg EnvConfig, logger *slog.Logger) (gossh.Signer, error) {
 		if err != nil {
 			return nil, fmt.Errorf("can't parse generated private key: %w", err)
 		}
+
 		return gens, nil
 	}
 	// reading private key
@@ -275,7 +279,6 @@ func createSigner(envCfg EnvConfig, logger *slog.Logger) (gossh.Signer, error) {
 	locals, err := gossh.ParsePrivateKey(pemBytes)
 	if err != nil {
 		return nil, fmt.Errorf("can't parse private key: %w", err)
-
 	}
 
 	return locals, nil
@@ -323,5 +326,6 @@ func createLogger(envCfg EnvConfig) *slog.Logger {
 	case "ERROR":
 		programLevel.Set(slog.LevelError)
 	}
+
 	return logger
 }

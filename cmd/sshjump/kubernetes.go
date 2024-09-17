@@ -7,7 +7,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type destPort struct {
+type Port struct {
 	namespace string
 	pod       string
 	container string
@@ -16,11 +16,11 @@ type destPort struct {
 	addr      string // the real addr to connect to
 }
 
-type destPorts []destPort
+type Ports []Port
 
-// KubernetesPortsForUser return a list of Kubernetes services/containers the provided user is allowed to reach
-func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (destPorts, error) {
-	var cps []destPort
+// KubernetesPortsForUser return a list of Kubernetes services/containers the provided user is allowed to reach.
+func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Ports, error) {
+	var cps []Port
 
 	// list all pods in all namespaces
 	pods, err := srv.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
@@ -31,7 +31,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (des
 	for _, pod := range pods.Items {
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
-				cps = append(cps, destPort{
+				cps = append(cps, Port{
 					namespace: pod.Namespace,
 					pod:       pod.Name,
 					container: container.Name,
@@ -48,7 +48,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (des
 		return nil, fmt.Errorf("can't fetch services list %w", err)
 	}
 
-	// Iterate through the services and print their names and ports
+	// Iterate through the services get their names and ports
 	for _, service := range services.Items {
 		var addr string
 		if len(service.Spec.ClusterIPs) > 0 {
@@ -56,7 +56,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (des
 		}
 
 		for _, port := range service.Spec.Ports {
-			cps = append(cps, destPort{
+			cps = append(cps, Port{
 				namespace: service.Namespace,
 				service:   service.Name,
 				port:      port.Port,
@@ -68,7 +68,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (des
 	return cps, nil
 }
 
-func (ps destPorts) MatchingService(name, namespace string, port int32) (string, bool) {
+func (ps Ports) MatchingService(name, namespace string, port int32) (string, bool) {
 	for _, ps := range ps {
 		if ps.namespace == namespace && ps.service == name && ps.port == port {
 			return fmt.Sprintf("%s:%d", ps.addr, ps.port), true
@@ -78,7 +78,7 @@ func (ps destPorts) MatchingService(name, namespace string, port int32) (string,
 	return "", false
 }
 
-func (ps destPorts) MatchingPod(name, namespace string, port int32) (string, bool) {
+func (ps Ports) MatchingPod(name, namespace string, port int32) (string, bool) {
 	for _, ps := range ps {
 		if ps.namespace == namespace && ps.pod == name && ps.port == port {
 			return fmt.Sprintf("%s:%d", ps.addr, ps.port), true
@@ -88,12 +88,12 @@ func (ps destPorts) MatchingPod(name, namespace string, port int32) (string, boo
 	return "", false
 }
 
-// filter list of ports using user permissions
-func (srv *Server) allowed(ports destPorts, user string) []destPort {
+// allowed filter list of ports using user permissions.
+func (srv *Server) allowed(ports Ports, user string) Ports {
 	userPerms, exists := srv.permissions[user]
 	if !exists {
 		// If the user doesn't exist in the permissions map, return an empty slice
-		return []destPort{}
+		return []Port{}
 	}
 
 	// full access
@@ -101,7 +101,7 @@ func (srv *Server) allowed(ports destPorts, user string) []destPort {
 		return ports
 	}
 
-	var allowed []destPort
+	var allowed []Port
 
 	for _, port := range ports {
 		for _, userNs := range userPerms.Namespaces {
@@ -114,7 +114,7 @@ func (srv *Server) allowed(ports destPorts, user string) []destPort {
 					continue
 				}
 
-				// Now check for pods & services
+				// check for pods & services
 				// check against user perms
 				for _, uPod := range userNs.Pods {
 					for _, up := range uPod.Ports {

@@ -8,7 +8,7 @@ import (
 var (
 	userConnections = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "sshjump_user_connection_count",
+			Name: "sshjump_user_connection_total",
 			Help: "Counting user connection",
 		},
 		[]string{"user"},
@@ -16,7 +16,7 @@ var (
 
 	userTunnels = promauto.NewCounterVec(
 		prometheus.CounterOpts{
-			Name: "sshjump_user_tunnel_count",
+			Name: "sshjump_user_tunnel_total",
 			Help: "Counting user tunnel",
 		},
 		[]string{"user"},

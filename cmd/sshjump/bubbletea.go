@@ -13,7 +13,7 @@ import (
 // handles the incoming ssh.Session. Here we just grab the terminal info and
 // pass it to the new model. You can also return tea.ProgramOptions (such as
 // tea.WithAltScreen) on a session by session basis.
-func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	// This should never fail, as we are using the activeterm middleware.
 	pty, _, _ := s.Pty()
 
@@ -43,7 +43,9 @@ func teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		bg:        bg,
 		txtStyle:  txtStyle,
 		quitStyle: quitStyle,
+		user:      s.User(),
 	}
+
 	return m, []tea.ProgramOption{tea.WithAltScreen()}
 }
 
@@ -54,6 +56,7 @@ type model struct {
 	width     int
 	height    int
 	bg        string
+	user      string
 	txtStyle  lipgloss.Style
 	quitStyle lipgloss.Style
 }
@@ -73,10 +76,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 	}
+
 	return m, nil
 }
 
 func (m model) View() string {
-	s := fmt.Sprintf("Your term is %s\nYour window size is %dx%d\nBackground: %s\nColor Profile: %s", m.term, m.width, m.height, m.bg, m.profile)
+	s := fmt.Sprintf("Your term is %s\nYour window size is %dx%d\nBackground: %s\nColor Profile: %s",
+		m.term, m.width, m.height, m.bg, m.profile)
+
 	return m.txtStyle.Render(s) + "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
 }

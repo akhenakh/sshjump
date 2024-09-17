@@ -22,10 +22,12 @@ func main() {
 			io.WriteString(s, "Remote forwarding available...\n")
 			select {}
 		}),
-		ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(func(ctx ssh.Context, host string, port uint32) bool {
-			log.Println("attempt to bind", host, port, "granted")
-			return true
-		}),
+		ReversePortForwardingCallback: ssh.ReversePortForwardingCallback(
+			func(ctx ssh.Context, host string, port uint32) bool {
+				log.Println("attempt to bind", host, port, "granted")
+
+				return true
+			}),
 		RequestHandlers: map[string]ssh.RequestHandler{
 			"tcpip-forward":        forwardHandler.HandleSSHRequest,
 			"cancel-tcpip-forward": forwardHandler.HandleSSHRequest,
