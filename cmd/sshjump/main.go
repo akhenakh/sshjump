@@ -88,8 +88,6 @@ func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 }
 
 func main() {
-	// TODO: reload config on changes
-
 	var envCfg EnvConfig
 	if err := env.Parse(&envCfg); err != nil {
 		fmt.Println(err)
@@ -97,20 +95,11 @@ func main() {
 
 	logger := createLogger(envCfg)
 
-	f, err := os.ReadFile(envCfg.ConfigPath)
+	keys, err := readPermission(logger, envCfg.ConfigPath)
 	if err != nil {
-		logger.Error("can't open config file", "err", err, "path", envCfg.ConfigPath)
+		logger.Error("can't read permissions, aborting", "path", envCfg.ConfigPath)
 		os.Exit(1)
 	}
-
-	var cfg SSHJumpConfig
-
-	if err := yaml.Unmarshal(f, &cfg); err != nil {
-		logger.Error("can't unmarshal yaml config file", "err", err, "path", envCfg.ConfigPath)
-		os.Exit(1)
-	}
-
-	keys := readKeys(logger, cfg)
 
 	if len(keys) == 0 {
 		logger.Error("configuration is empty, aborting", "path", envCfg.ConfigPath)
@@ -144,7 +133,8 @@ func main() {
 		hln, err := net.Listen("tcp", haddr)
 		if err != nil {
 			logger.Error("gRPC Health server: failed to listen", "error", err)
-			os.Exit(2)
+
+			return err
 		}
 		logger.Info(fmt.Sprintf("gRPC health server listening at %s", haddr))
 
@@ -154,10 +144,16 @@ func main() {
 	signer, err := createSigner(envCfg, logger)
 	if err != nil {
 		logger.Error("can't get valid host key", "error", err)
-		os.Exit(2)
+		os.Exit(1)
 	}
 
-	s := NewServer(logger, signer, keys, clientset)
+	s := NewServer(logger, healthServer, signer, keys, clientset)
+
+	// start watching for config change
+	if err := s.StartWatchConfig(ctx, envCfg.ConfigPath); err != nil {
+		logger.Error("failed to start watch config", "error", err)
+		os.Exit(1)
+	}
 
 	// web server metrics
 	g.Go(func() error {
@@ -236,6 +232,8 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
+	s.StopWatchConf()
+
 	if httpMetricsServer != nil {
 		_ = httpMetricsServer.Shutdown(shutdownCtx)
 	}
@@ -251,8 +249,23 @@ func main() {
 	err = g.Wait()
 	if err != nil {
 		slog.Error("server returning an error", "error", err)
-		os.Exit(1)
+		os.Exit(2)
 	}
+}
+
+func readPermission(logger *slog.Logger, path string) (map[string]Permission, error) {
+	f, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("can't open config file %w", err)
+	}
+
+	var cfg SSHJumpConfig
+
+	if err := yaml.Unmarshal(f, &cfg); err != nil {
+		return nil, fmt.Errorf("can't unmarshal yaml config file %w", err)
+	}
+
+	return readKeys(logger, cfg), nil
 }
 
 func createSigner(envCfg EnvConfig, logger *slog.Logger) (gossh.Signer, error) {
@@ -294,7 +307,8 @@ func createKubeClient(envCfg EnvConfig, logger *slog.Logger) (*kubernetes.Client
 				"error", err,
 				"path", envCfg.KubeConfigPath,
 			)
-			os.Exit(1)
+
+			return nil, err
 		}
 		kubeConfig = config
 	} else {
@@ -302,7 +316,8 @@ func createKubeClient(envCfg EnvConfig, logger *slog.Logger) (*kubernetes.Client
 		config, err := rest.InClusterConfig()
 		if err != nil {
 			logger.Error("can't create kubernetes config from within cluster", "error", err)
-			os.Exit(1)
+
+			return nil, err
 		}
 		kubeConfig = config
 	}
