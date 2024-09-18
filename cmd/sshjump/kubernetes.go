@@ -7,17 +7,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-type Port struct {
-	namespace string
-	pod       string
-	container string
-	service   string
-	port      int32
-	addr      string // the real addr to connect to
-}
-
-type Ports []Port
-
 // KubernetesPortsForUser return a list of Kubernetes services/containers the provided user is allowed to reach.
 func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Ports, error) {
 	var kports []Port
@@ -65,80 +54,11 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Por
 		}
 	}
 
-	return srv.allowed(kports, user), nil
-}
-
-func (ps Ports) MatchingService(name, namespace string, port int32) (string, bool) {
-	for _, ps := range ps {
-		if ps.namespace == namespace && ps.service == name && ps.port == port {
-			return fmt.Sprintf("%s:%d", ps.addr, ps.port), true
-		}
-	}
-
-	return "", false
-}
-
-func (ps Ports) MatchingPod(name, namespace string, port int32) (string, bool) {
-	for _, ps := range ps {
-		if ps.namespace == namespace && ps.pod == name && ps.port == port {
-			return fmt.Sprintf("%s:%d", ps.addr, ps.port), true
-		}
-	}
-
-	return "", false
-}
-
-// allowed filter list of ports using user permissions.
-func (srv *Server) allowed(ports Ports, user string) Ports {
 	userPerms, exists := srv.permissions[user]
 	if !exists {
 		// If the user doesn't exist in the permissions map, return an empty slice
-		return []Port{}
+		return []Port{}, nil
 	}
 
-	// full access
-	if userPerms.AllowAll {
-		return ports
-	}
-
-	var allowed []Port
-
-	for _, port := range ports {
-		for _, userNs := range userPerms.Namespaces {
-			if userNs.Namespace == port.namespace {
-				// Namespace matches
-				if len(userNs.Pods) == 0 {
-					// full access to the namespace
-					allowed = append(allowed, port)
-
-					continue
-				}
-
-				// check for pods & services
-				// check against user perms
-				for _, uPod := range userNs.Pods {
-					for _, up := range uPod.Ports {
-						if addr, ok := ports.MatchingPod(uPod.Name, userNs.Namespace, up); ok {
-							port.addr = addr
-							allowed = append(allowed, port)
-
-							continue
-						}
-					}
-				}
-				for _, uService := range userNs.Services {
-					for _, up := range uService.Ports {
-						if addr, ok := ports.MatchingService(uService.Name, userNs.Namespace, up); ok {
-							port.addr = addr
-							allowed = append(allowed, port)
-
-							continue
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return allowed
+	return Allowed(kports, userPerms), nil
 }

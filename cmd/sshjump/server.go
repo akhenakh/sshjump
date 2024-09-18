@@ -328,7 +328,7 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 				if !ok {
 					return
 				}
-				srv.logger.Error("error watching config file: %v", err.Error())
+				srv.logger.Error("error watching config file", "error", err.Error())
 			}
 		}
 	}()
@@ -336,7 +336,7 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 	// watch parent directory for atomic updates
 	err = watcher.Add(filepath.Dir(path))
 	if err != nil {
-		return fmt.Errorf("Error adding config file to watcher: %w", err)
+		return fmt.Errorf("error adding config file to watcher: %w", err)
 	}
 
 	return nil
