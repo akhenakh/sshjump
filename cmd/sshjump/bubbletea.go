@@ -2,10 +2,13 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
+	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/bubbletea"
 )
 
@@ -14,6 +17,8 @@ import (
 // pass it to the new model. You can also return tea.ProgramOptions (such as
 // tea.WithAltScreen) on a session by session basis.
 func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
+	userConnections.WithLabelValues(s.User()).Inc()
+
 	// This should never fail, as we are using the activeterm middleware.
 	pty, _, _ := s.Pty()
 
@@ -35,6 +40,9 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		bg = "dark"
 	}
 
+	// get the current targeted port
+	// currentPort := s.Context().Value(portContextKey).(Port) //nolint:forcetypeassert
+
 	m := model{
 		term:      pty.Term,
 		profile:   renderer.ColorProfile().Name(),
@@ -44,6 +52,7 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		txtStyle:  txtStyle,
 		quitStyle: quitStyle,
 		user:      s.User(),
+		// currentPort: currentPort,
 	}
 
 	return m, []tea.ProgramOption{tea.WithAltScreen()}
@@ -51,14 +60,15 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 
 // Just a generic tea.Model to demo terminal information of ssh.
 type model struct {
-	term      string
-	profile   string
-	width     int
-	height    int
-	bg        string
-	user      string
-	txtStyle  lipgloss.Style
-	quitStyle lipgloss.Style
+	term        string
+	profile     string
+	width       int
+	height      int
+	bg          string
+	user        string
+	currentPort Port
+	txtStyle    lipgloss.Style
+	quitStyle   lipgloss.Style
 }
 
 func (m model) Init() tea.Cmd {
@@ -81,8 +91,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) View() string {
-	s := fmt.Sprintf("Your term is %s\nYour window size is %dx%d\nBackground: %s\nColor Profile: %s",
-		m.term, m.width, m.height, m.bg, m.profile)
+	s := fmt.Sprintf("User %s", m.user)
 
 	return m.txtStyle.Render(s) + "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
+}
+
+// StructuredMiddlewareWithLogger provides basic connection logging in a structured form.
+// Connects are logged with the remote address, invoked command, TERM setting,
+// window dimensions, client version, and if the auth was public key based.
+// Disconnect will log the remote address and connection duration.
+func StructuredMiddlewareWithLogger(logger *slog.Logger) wish.Middleware {
+	return func(next ssh.Handler) ssh.Handler {
+		return func(sess ssh.Session) {
+			ct := time.Now()
+			logger.Info(
+				"connect",
+				"user", sess.User(),
+				"remote-addr", sess.RemoteAddr().String(),
+				"client-version", sess.Context().ClientVersion(),
+			)
+			next(sess)
+			logger.Info(
+				"disconnect",
+				"user", sess.User(),
+				"remote-addr", sess.RemoteAddr().String(),
+				"duration", time.Since(ct),
+			)
+		}
+	}
 }

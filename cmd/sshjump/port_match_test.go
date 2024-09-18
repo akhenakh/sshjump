@@ -94,7 +94,7 @@ func TestAllowed(t *testing.T) {
 				namespace: "default",
 				pod:       "nginx",
 				port:      8080,
-				addr:      "10.16.0.10",
+				addr:      "10.16.0.10:8080",
 			}},
 			allowAllPerm,
 			[]Port{{
@@ -111,7 +111,7 @@ func TestAllowed(t *testing.T) {
 				namespace: "default",
 				pod:       "nginx",
 				port:      8080,
-				addr:      "10.16.0.10",
+				addr:      "10.16.0.10:8080",
 			}},
 			namespacePerm,
 			[]Port{{

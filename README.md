@@ -173,3 +173,4 @@ There is a `Dockerfile` to be used with Docker & Podman too.
 - [ ] helm example
 - [X] tailscale
 - [ ] network policies
+- [ ] add a sshsession id for tracking in logs

@@ -16,17 +16,10 @@ import (
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/activeterm"
 	"github.com/charmbracelet/wish/bubbletea"
-	"github.com/charmbracelet/wish/logging"
 	"github.com/fsnotify/fsnotify"
 	gossh "golang.org/x/crypto/ssh"
 	"google.golang.org/grpc/health"
 	"k8s.io/client-go/kubernetes"
-)
-
-var (
-	// TODO: parametrize.
-	DeadlineTimeout = 30 * time.Second
-	IdleTimeout     = 10 * time.Second
 )
 
 type Server struct {
@@ -50,6 +43,14 @@ type localForwardChannelData struct {
 	OriginPort uint32
 }
 
+// TODO: parametrize.
+var (
+	IdleTimeout    = 2 * time.Minute
+	portContextKey contextKey
+)
+
+type contextKey int
+
 func NewServer(
 	logger *slog.Logger,
 	healthServer *health.Server,
@@ -68,10 +69,12 @@ func NewServer(
 		wish.WithMiddleware(
 			bubbletea.Middleware(jumps.teaHandler),
 			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
-			logging.Middleware(),
+			StructuredMiddlewareWithLogger(logger),
 		),
 		func(s *ssh.Server) error {
 			s.LocalPortForwardingCallback = func(ctx ssh.Context, bindHost string, bindPort uint32) bool {
+				// TODO: prevalidation ?
+
 				slog.Debug("Accepted forward", "host", bindHost, "port", bindPort, "user", ctx.User())
 
 				return true
@@ -81,7 +84,6 @@ func NewServer(
 				"session":      ssh.DefaultSessionHandler,
 			}
 
-			s.MaxTimeout = DeadlineTimeout
 			s.IdleTimeout = IdleTimeout
 			s.AddHostKey(privateKey)
 
@@ -96,16 +98,6 @@ func NewServer(
 	jumps.Server = sshServer
 
 	return jumps
-}
-
-func (srv *Server) Handler(s ssh.Session) {
-	srv.logger.Info("login",
-		"username", s.User(),
-		"ip", s.RemoteAddr().String(),
-	)
-	userConnections.WithLabelValues(s.User()).Inc()
-	io.WriteString(s, fmt.Sprintf("user %s\n", s.User()))
-	select {}
 }
 
 // PermsForUser returns the permissions for a given user.

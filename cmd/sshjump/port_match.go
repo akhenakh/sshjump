@@ -41,7 +41,6 @@ func Allowed(ports Ports, userPerms Permission) Ports {
 		fullAccess := userPerms.AllowAll
 		if fullAccess {
 			for _, p := range ports {
-				p.addr = fmt.Sprintf("%s:%d", p.addr, p.port)
 				allowed = append(allowed, p)
 			}
 
@@ -52,7 +51,6 @@ func Allowed(ports Ports, userPerms Permission) Ports {
 			if userNs.Namespace == port.namespace {
 				// check if user got the full access to the namespace no restriction
 				if len(userNs.Pods) == 0 {
-					port.addr = fmt.Sprintf("%s:%d", port.addr, port.port)
 					allowed = append(allowed, port)
 
 					continue
