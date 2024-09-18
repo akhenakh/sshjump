@@ -292,8 +292,8 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 			select {
 			case <-ctx.Done():
 				srv.configWatcher.Close()
-				return
 
+				return
 			case event, ok := <-srv.configWatcher.Events:
 				if !ok {
 					return

@@ -54,7 +54,6 @@ func main() {
 	}
 
 	logger := createLogger(envCfg)
-
 	keys, err := readPermission(logger, envCfg.ConfigPath)
 	if err != nil {
 		logger.Error("can't read permissions, aborting", "path", envCfg.ConfigPath, "error", err)

@@ -20,7 +20,7 @@ type Ports []Port
 
 // KubernetesPortsForUser return a list of Kubernetes services/containers the provided user is allowed to reach.
 func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Ports, error) {
-	var cps []Port
+	var kports []Port
 
 	// list all pods in all namespaces
 	pods, err := srv.clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
@@ -31,7 +31,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Por
 	for _, pod := range pods.Items {
 		for _, container := range pod.Spec.Containers {
 			for _, port := range container.Ports {
-				cps = append(cps, Port{
+				kports = append(kports, Port{
 					namespace: pod.Namespace,
 					pod:       pod.Name,
 					container: container.Name,
@@ -56,7 +56,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Por
 		}
 
 		for _, port := range service.Spec.Ports {
-			cps = append(cps, Port{
+			kports = append(kports, Port{
 				namespace: service.Namespace,
 				service:   service.Name,
 				port:      port.Port,
@@ -65,7 +65,7 @@ func (srv *Server) KubernetesPortsForUser(ctx context.Context, user string) (Por
 		}
 	}
 
-	return cps, nil
+	return srv.allowed(kports, user), nil
 }
 
 func (ps Ports) MatchingService(name, namespace string, port int32) (string, bool) {
