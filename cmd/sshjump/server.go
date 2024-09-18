@@ -180,7 +180,7 @@ func (srv *Server) DirectTCPIPHandler(
 		}
 		namespace := ds[1]
 		service := ds[2]
-		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort)) // nolint:gosec
+		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
 		if !ok {
 			_ = newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
 
@@ -202,7 +202,7 @@ func (srv *Server) DirectTCPIPHandler(
 		}
 		namespace := ds[0]
 		service := ds[1]
-		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort)) // nolint:gosec
+		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
 		if !ok {
 			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
 
