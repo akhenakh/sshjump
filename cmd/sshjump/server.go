@@ -180,7 +180,7 @@ func (srv *Server) DirectTCPIPHandler(
 		}
 		namespace := ds[1]
 		service := ds[2]
-		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
+		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort)) // nolint:gosec
 		if !ok {
 			_ = newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
 
@@ -202,7 +202,7 @@ func (srv *Server) DirectTCPIPHandler(
 		}
 		namespace := ds[0]
 		service := ds[1]
-		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
+		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort)) // nolint:gosec
 		if !ok {
 			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
 
@@ -266,7 +266,7 @@ func (srv *Server) DirectTCPIPHandler(
 	}()
 }
 
-// StartWatchConfig starts a file watcher to monitor for config file changes, will reload on changes
+// StartWatchConfig starts a file watcher to monitor for config file changes, will reload on changes.
 func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 	// watch for file changes and issue a reload on changes
 	watcher, err := fsnotify.NewWatcher()

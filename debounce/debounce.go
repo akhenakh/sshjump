@@ -7,7 +7,7 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-// Debouncer will debounce fsnotify events
+// Debouncer will debounce fsnotify events.
 type Debouncer struct {
 	duration time.Duration
 	mu       sync.Mutex
