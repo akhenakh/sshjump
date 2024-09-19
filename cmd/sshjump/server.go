@@ -140,6 +140,10 @@ func (srv *Server) DirectTCPIPHandler(
 	newChan gossh.NewChannel,
 	ctx ssh.Context,
 ) {
+	logger := srv.logger.With(
+		slog.String("user", ctx.User()),
+	)
+
 	d := localForwardChannelData{}
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
@@ -155,72 +159,48 @@ func (srv *Server) DirectTCPIPHandler(
 		return
 	}
 
+	logger = srv.logger.With(
+		slog.String("host", d.DestAddr),
+		slog.Int("port", int(d.DestPort)),
+	)
+
 	ports, err := srv.KubernetesPortsForUser(ctx, ctx.User())
 	if err != nil {
 		newChan.Reject(gossh.ConnectionFailed, "error querying Kubernetes api: "+err.Error())
 
-		srv.logger.Debug("error querying Kubernetes API",
+		logger.Debug("error querying Kubernetes API",
 			"error", err.Error(),
-			"user", ctx.User(),
-			"host", d.DestAddr,
-			"port", d.DestPort,
 		)
 
 		return
 	}
 
 	var addr string
-	// test for service request: srv.namespace.servicename
-	if strings.HasPrefix(d.DestAddr, "svc.") {
-		ds := strings.Split(d.DestAddr, ".")
-		if len(ds) != 3 {
-			newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
+	var ok bool
 
-			return
-		}
-		namespace := ds[1]
-		service := ds[2]
-		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
-		if !ok {
-			_ = newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
+	ds := strings.Split(d.DestAddr, ".")
+	switch {
+	case strings.HasPrefix(d.DestAddr, "svc.") && len(ds) == 3:
+		addr, ok = ports.MatchingService(ds[2], ds[1], int32(d.DestPort))
+	case strings.HasPrefix(d.DestAddr, "pod.") && len(ds) == 3:
+		addr, ok = ports.MatchingPod(ds[2], ds[1], int32(d.DestPort))
+	case len(ds) == 2:
+		addr, ok = ports.MatchingPod(ds[1], ds[0], int32(d.DestPort))
+	default:
+		newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
 
-			srv.logger.Warn("destination not authorized",
-				"user", ctx.User(),
-				"host", d.DestAddr,
-				"port", d.DestPort,
-			)
-
-			return
-		}
-		addr = daddr
-	} else {
-		ds := strings.Split(d.DestAddr, ".")
-		if len(ds) != 2 {
-			_ = newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
-
-			return
-		}
-		namespace := ds[0]
-		service := ds[1]
-		daddr, ok := ports.MatchingService(service, namespace, int32(d.DestPort))
-		if !ok {
-			newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
-
-			srv.logger.Warn("destination not authorized",
-				"user", ctx.User(),
-				"host", d.DestAddr,
-				"port", d.DestPort,
-			)
-
-			return
-		}
-		addr = daddr
+		return
 	}
 
-	srv.logger.Debug("forward in progress",
+	if !ok {
+		newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
+		logger.Warn("destination not authorized")
+
+		return
+	}
+
+	logger.Debug("forward in progress",
 		"user", ctx.User(),
-		"host", d.DestAddr,
-		"port", d.DestPort,
 		"addr", addr,
 	)
 
@@ -236,9 +216,6 @@ func (srv *Server) DirectTCPIPHandler(
 
 		srv.logger.Warn("connection error",
 			"error", err.Error(),
-			"user", ctx.User(),
-			"host", d.DestAddr,
-			"port", d.DestPort,
 			"addr", addr,
 		)
 
