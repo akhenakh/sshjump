@@ -79,16 +79,18 @@ func NewServer(
 
 				return true
 			}
+
 			s.ChannelHandlers = map[string]ssh.ChannelHandler{
 				"direct-tcpip": jumps.DirectTCPIPHandler,
 				"session":      ssh.DefaultSessionHandler,
 			}
 
+			// Host private key
 			s.IdleTimeout = IdleTimeout
 			s.AddHostKey(privateKey)
 
+			// Users public keys
 			publicKeyOption := ssh.PublicKeyAuth(jumps.PublicKeyHandler)
-
 			s.SetOption(publicKeyOption)
 
 			return nil
@@ -151,18 +153,18 @@ func (srv *Server) DirectTCPIPHandler(
 		return
 	}
 
-	srv.logger.Debug("tcp fwd request", "user", ctx.User(), "host", d.DestAddr, "port", d.DestPort)
+	logger = srv.logger.With(
+		slog.String("host", d.DestAddr),
+		slog.Int("port", int(d.DestPort)),
+	)
+
+	logger.Debug("tcp fwd request")
 
 	if s.LocalPortForwardingCallback == nil || !s.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
 		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
 
 		return
 	}
-
-	logger = srv.logger.With(
-		slog.String("host", d.DestAddr),
-		slog.Int("port", int(d.DestPort)),
-	)
 
 	ports, err := srv.KubernetesPortsForUser(ctx, ctx.User())
 	if err != nil {
@@ -179,6 +181,7 @@ func (srv *Server) DirectTCPIPHandler(
 	var ok bool
 
 	ds := strings.Split(d.DestAddr, ".")
+
 	switch {
 	case strings.HasPrefix(d.DestAddr, "svc.") && len(ds) == 3:
 		addr, ok = ports.MatchingService(ds[2], ds[1], int32(d.DestPort))
@@ -311,8 +314,8 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 	return nil
 }
 
-// StopWatchConf stop watching for config file changes.
-func (srv *Server) StopWatchConf() {
+// StopWatchConfig stop watching for config file changes.
+func (srv *Server) StopWatchConfig() {
 	if srv.configWatcher != nil {
 		_ = srv.configWatcher.Close()
 	}
