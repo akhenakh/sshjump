@@ -1,15 +1,16 @@
 package main
 
 import (
-	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
 	"github.com/charmbracelet/wish"
 	"github.com/charmbracelet/wish/bubbletea"
+	"github.com/davecgh/go-spew/spew"
 )
 
 // You can wire any Bubble Tea model up to the middleware with a function that
@@ -32,8 +33,7 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	// The recommended way to use these styles is to then pass them down to
 	// your Bubble Tea model.
 	renderer := bubbletea.MakeRenderer(s)
-	txtStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
-	quitStyle := renderer.NewStyle().Foreground(lipgloss.Color("8"))
+	docStyle := renderer.NewStyle().Margin(1, 2)
 
 	bg := "light"
 	if renderer.HasDarkBackground() {
@@ -41,45 +41,55 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	}
 
 	// get the current targeted port
-	// currentPort := s.Context().Value(portContextKey).(Port) //nolint:forcetypeassert
+	currentPort := s.Context().Value(portContextKey).(Port) //nolint:forcetypeassert
 
 	m := model{
-		term:      pty.Term,
-		profile:   renderer.ColorProfile().Name(),
-		width:     pty.Window.Width,
-		height:    pty.Window.Height,
-		bg:        bg,
-		txtStyle:  txtStyle,
-		quitStyle: quitStyle,
-		user:      s.User(),
-		// currentPort: currentPort,
+		term:        pty.Term,
+		profile:     renderer.ColorProfile().Name(),
+		width:       pty.Window.Width,
+		height:      pty.Window.Height,
+		bg:          bg,
+		docStyle:    docStyle,
+		user:        s.User(),
+		logger:      srv.logger,
+		currentPort: currentPort,
+		list:        list.New(nil, list.NewDefaultDelegate(), 0, 0),
 	}
+	m.list.Title = "Available Connections"
 
-	return m, []tea.ProgramOption{tea.WithAltScreen()}
+	return &m, []tea.ProgramOption{tea.WithAltScreen()}
 }
 
 // Just a generic tea.Model to demo terminal information of ssh.
 type model struct {
-	term        string
-	profile     string
-	width       int
-	height      int
-	bg          string
-	user        string
-	currentPort Port
-	txtStyle    lipgloss.Style
-	quitStyle   lipgloss.Style
+	term           string
+	profile        string
+	width          int
+	height         int
+	bg             string
+	user           string
+	logger         *slog.Logger
+	currentPort    Port
+	availablePorts Ports
+	docStyle       lipgloss.Style
+	list           list.Model
+	dump           bool
 }
 
-func (m model) Init() tea.Cmd {
+func (m *model) Init() tea.Cmd {
 	return nil
 }
 
-func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if m.dump {
+		m.logger.Debug("update", "msg", spew.Sdump(msg))
+	}
 	switch msg := msg.(type) {
+
 	case tea.WindowSizeMsg:
-		m.height = msg.Height
-		m.width = msg.Width
+		h, v := m.docStyle.GetFrameSize()
+		m.list.SetSize(msg.Width-h, msg.Height-v)
+
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
@@ -90,10 +100,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) View() string {
-	s := fmt.Sprintf("User %s", m.user)
-
-	return m.txtStyle.Render(s) + "\n\n" + m.quitStyle.Render("Press 'q' to quit\n")
+func (m *model) View() string {
+	return m.docStyle.Render(m.list.View())
 }
 
 // StructuredMiddlewareWithLogger provides basic connection logging in a structured form.

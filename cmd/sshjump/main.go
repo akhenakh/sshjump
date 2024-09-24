@@ -39,6 +39,7 @@ type EnvConfig struct {
 	HTTPMetricsPort int    `env:"METRICS_PORT" envDefault:"8888"`
 	KubeConfigPath  string `env:"KUBE_CONFIG_PATH"` // Set the path of a kubeconfig file when running outside a cluster
 	TSAuthKeyPath   string `env:"TS_AUTHKEY_PATH"`
+	TestUI          bool   `env:"TEST_UI"` // run UI only for development
 }
 
 var (
@@ -51,6 +52,7 @@ func main() {
 	var envCfg EnvConfig
 	if err := env.Parse(&envCfg); err != nil {
 		fmt.Println(err)
+		os.Exit(1)
 	}
 
 	logger := createLogger(envCfg)
@@ -74,6 +76,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if envCfg.TestUI {
+		startUIOnly(clientset)
+		return
+	}
+
 	// catch termination
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, syscall.SIGINT, syscall.SIGTERM)
@@ -84,22 +91,10 @@ func main() {
 	// gRPC Health Server
 	healthServer := health.NewServer()
 	g.Go(func() error {
-		grpcHealthServer = grpc.NewServer()
-
-		healthpb.RegisterHealthServer(grpcHealthServer, healthServer)
-
-		haddr := fmt.Sprintf("%s:%d", envCfg.Host, envCfg.HealthPort)
-		hln, err := net.Listen("tcp", haddr)
-		if err != nil {
-			logger.Error("gRPC Health server: failed to listen", "error", err)
-
-			return err
-		}
-		logger.Info(fmt.Sprintf("gRPC health server listening at %s", haddr))
-
-		return grpcHealthServer.Serve(hln)
+		return startHealthServer(logger, envCfg, healthServer)
 	})
 
+	// prepare ssh host key
 	signer, err := createSigner(logger, envCfg)
 	if err != nil {
 		logger.Error("can't get valid host key", "error", err)
@@ -116,63 +111,12 @@ func main() {
 
 	// web server metrics
 	g.Go(func() error {
-		httpMetricsServer = &http.Server{
-			Addr:         fmt.Sprintf(":%d", envCfg.HTTPMetricsPort),
-			ReadTimeout:  10 * time.Second,
-			WriteTimeout: 10 * time.Second,
-		}
-		logger.Info(fmt.Sprintf("HTTP Metrics server listening at :%d", envCfg.HTTPMetricsPort))
-
-		// Register Prometheus metrics handler.
-		http.Handle("/metrics", promhttp.Handler())
-
-		if err := httpMetricsServer.ListenAndServe(); err != http.ErrServerClosed {
-			return err
-		}
-
-		return nil
+		return startMetricsServer(logger, envCfg)
 	})
 
 	// ssh server
 	g.Go(func() error {
-		var ln net.Listener
-
-		// Starting Tailscale if key is present
-		if envCfg.TSAuthKeyPath != "" {
-			key, err := ioutil.ReadFile(envCfg.TSAuthKeyPath)
-			if err != nil {
-				return err
-			}
-
-			host := fmt.Sprintf("sshjump-%s", "todo-generate-clustername")
-			srv := &tsnet.Server{
-				AuthKey:   string(key),
-				Ephemeral: true,
-				Hostname:  host,
-			}
-
-			logger.Info("starting ssh server", "port", envCfg.Port, "tail", host)
-
-			l, err := srv.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
-			if err != nil {
-				return err
-			}
-			ln = l
-		} else {
-			l, err := net.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
-			if err != nil {
-				return err
-			}
-			ln = l
-		}
-
-		logger.Info("starting ssh server", "port", envCfg.Port)
-
-		if err := s.Serve(ln); err != nil && err != ssh.ErrServerClosed {
-			return err
-		}
-
-		return nil
+		return startSSHServer(logger, envCfg, s)
 	})
 
 	select {
@@ -203,13 +147,89 @@ func main() {
 		grpcHealthServer.GracefulStop()
 	}
 
-	s.StopWatchConf()
+	s.StopWatchConfig()
 
 	err = g.Wait()
 	if err != nil {
 		slog.Error("server returning an error", "error", err)
 		os.Exit(2)
 	}
+}
+
+func startMetricsServer(logger *slog.Logger, envCfg EnvConfig) error {
+	httpMetricsServer = &http.Server{
+		Addr:         fmt.Sprintf(":%d", envCfg.HTTPMetricsPort),
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+	logger.Info(fmt.Sprintf("HTTP Metrics server listening at :%d", envCfg.HTTPMetricsPort))
+
+	// Register Prometheus metrics handler.
+	http.Handle("/metrics", promhttp.Handler())
+
+	if err := httpMetricsServer.ListenAndServe(); err != http.ErrServerClosed {
+		return err
+	}
+
+	return nil
+}
+
+func startHealthServer(logger *slog.Logger, envCfg EnvConfig, healthServer *health.Server) error {
+	grpcHealthServer = grpc.NewServer()
+
+	healthpb.RegisterHealthServer(grpcHealthServer, healthServer)
+
+	haddr := fmt.Sprintf("%s:%d", envCfg.Host, envCfg.HealthPort)
+	hln, err := net.Listen("tcp", haddr)
+	if err != nil {
+		logger.Error("gRPC Health server: failed to listen", "error", err)
+
+		return err
+	}
+	logger.Info(fmt.Sprintf("gRPC health server listening at %s", haddr))
+
+	return grpcHealthServer.Serve(hln)
+}
+
+func startSSHServer(logger *slog.Logger, envCfg EnvConfig, s *Server) error {
+	var ln net.Listener
+
+	// Starting Tailscale if key is present
+	if envCfg.TSAuthKeyPath != "" {
+		key, err := ioutil.ReadFile(envCfg.TSAuthKeyPath)
+		if err != nil {
+			return err
+		}
+
+		host := fmt.Sprintf("sshjump-%s", "todo-generate-clustername")
+		srv := &tsnet.Server{
+			AuthKey:   string(key),
+			Ephemeral: true,
+			Hostname:  host,
+		}
+
+		logger.Info("starting ssh server", "port", envCfg.Port, "tail", host)
+
+		l, err := srv.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
+		if err != nil {
+			return err
+		}
+		ln = l
+	} else {
+		l, err := net.Listen("tcp", fmt.Sprintf(":%d", envCfg.Port))
+		if err != nil {
+			return err
+		}
+		ln = l
+	}
+
+	logger.Info("starting ssh server", "port", envCfg.Port)
+
+	if err := s.Serve(ln); err != nil && err != ssh.ErrServerClosed {
+		return err
+	}
+
+	return nil
 }
 
 func readPermission(logger *slog.Logger, path string) (map[string]Permission, error) {
@@ -289,15 +309,15 @@ func createKubeClient(envCfg EnvConfig, logger *slog.Logger) (*kubernetes.Client
 
 func createLogger(envCfg EnvConfig) *slog.Logger {
 	programLevel := new(slog.LevelVar)
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-		AddSource: true,
-		Level:     programLevel,
-	}))
-	slog.SetDefault(logger)
+
+	opts := &slog.HandlerOptions{
+		Level: programLevel,
+	}
 
 	switch strings.ToUpper(envCfg.LogLevel) {
 	case "DEBUG":
 		programLevel.Set(slog.LevelDebug)
+		opts.AddSource = true
 	case "INFO":
 		programLevel.Set(slog.LevelInfo)
 	case "WARN":
@@ -305,6 +325,9 @@ func createLogger(envCfg EnvConfig) *slog.Logger {
 	case "ERROR":
 		programLevel.Set(slog.LevelError)
 	}
+
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	slog.SetDefault(logger)
 
 	return logger
 }

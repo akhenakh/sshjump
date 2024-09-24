@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sshjump
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sshjump
+  template:
+    metadata:
+      labels:
+        app: sshjump
+      {{- if .Values.Metrics.enabled }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+      {{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      containers:
+        - name: sshjump
+          image: {{ .Values.image }}
+          env:
+            - name: LOG_LEVEL
+              value: DEBUG
+            - name: HEALTH_PORT
+              value: "6666"
+            - name: CONFIG_PATH
+              value: /app/config/config.yaml
+            - name: PRIVATE_KEY_PATH
+              value: /app/config/key.rsa
+          ports:
+            - containerPort: 8888
+              name: http-metrics
+            - containerPort: 2222
+              name: ssh
+          livenessProbe:
+            grpc:
+              port: 6666
+            initialDelaySeconds: 2
+            periodSeconds: 4
+          readinessProbe:
+            grpc:
+              port: 6666
+            initialDelaySeconds: 2
+            periodSeconds: 4
+          volumeMounts:
+            - name: config-volume
+              mountPath: /app/config
+      volumes:
+        - name: config-volume
+          configMap:
+            name: sshjump-config-cm
