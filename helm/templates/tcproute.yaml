@@ -1,0 +1,19 @@
+{{- if .Values.tcpRoute.enabled }}
+
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: sshjump-routes
+  namespace: {{ .Release.Namespace }}
+spec:
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+     name: {{ .Values.tcpRoute.gatewayName }}
+      namespace: {{ .Values.tcpRoute.gatewayNamespace }}
+  rules:
+    - backendRefs:
+        - name: sshjump
+          port: 2222
+          
+{{- end }}

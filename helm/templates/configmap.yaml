@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sshjump-config-cm
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    {{ .Values.sshjumpConfig | toYaml | indent 4 }}
+  key.rsa: |
+    {{ .Values.private_key | indent 4}}
+

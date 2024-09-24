@@ -1,0 +1,23 @@
+apiVersion: v2
+name: sshjump
+description: A Helm chart for deploying sshjump
+
+type: application
+version: 0.1.0
+appVersion: 0.1
+
+values:
+  image: akhenakh/sshjump:0.1 # Default image
+  sshjumpConfig:
+    version: core.sshjump.dev/v1
+    permissions: [] # Default empty permissions
+  private_key: "" # Private key content
+  tcpRoute:
+    enabled: false # Enable/disable the TCP Route
+    gatewayNamespace: envoy-gateway-system # Default gateway namespace
+    gatewayName: eg # Default gateway name
+  serviceAccount:
+    create: true # create service account creation
+    name: sshjump-reader-sa
+  metric:
+    enabled: true
