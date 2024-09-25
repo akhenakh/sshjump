@@ -9,7 +9,7 @@ spec:
   parentRefs:
     - group: gateway.networking.k8s.io
       kind: Gateway
-     name: {{ .Values.tcpRoute.gatewayName }}
+      name: {{ .Values.tcpRoute.gatewayName }}
       namespace: {{ .Values.tcpRoute.gatewayNamespace }}
   rules:
     - backendRefs:

@@ -44,7 +44,7 @@ type EnvConfig struct {
 
 var (
 	grpcHealthServer  *grpc.Server
-	sshServer         *ssh.Server
+	sshServer         *Server
 	httpMetricsServer *http.Server
 )
 
@@ -101,10 +101,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	s := NewServer(logger, healthServer, signer, keys, clientset)
+	sshServer = NewServer(logger, healthServer, signer, keys, clientset)
 
 	// start watching for config change
-	if err := s.StartWatchConfig(ctx, envCfg.ConfigPath); err != nil {
+	if err := sshServer.StartWatchConfig(ctx, envCfg.ConfigPath); err != nil {
 		logger.Error("failed to start watch config", "error", err)
 		os.Exit(1)
 	}
@@ -116,7 +116,7 @@ func main() {
 
 	// ssh server
 	g.Go(func() error {
-		return startSSHServer(logger, envCfg, s)
+		return startSSHServer(logger, envCfg, sshServer)
 	})
 
 	select {
@@ -147,7 +147,7 @@ func main() {
 		grpcHealthServer.GracefulStop()
 	}
 
-	s.StopWatchConfig()
+	sshServer.StopWatchConfig()
 
 	err = g.Wait()
 	if err != nil {
