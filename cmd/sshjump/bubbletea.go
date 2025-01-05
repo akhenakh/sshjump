@@ -94,8 +94,9 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		bg:       bg,
 		docStyle: docStyle,
 		user:     s.User(),
-		list:     list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		list:     l,
 		logger:   srv.logger,
+		ready:    true,
 	}
 	m.list.Title = "Available Connections"
 
@@ -129,6 +130,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) View() string {
+	if m.quitting {
+		return "Goodbye!\n"
+	}
+	if !m.ready {
+		return "\n  Initializing..."
+	}
 	return m.docStyle.Render(m.list.View())
 }
 
