@@ -8,12 +8,12 @@ metadata:
 spec:
   parentRefs:
     - group: gateway.networking.k8s.io
-      kind: Gateway
+      kind: Gateways
       name: {{ .Values.tcpRoute.gatewayName }}
       namespace: {{ .Values.tcpRoute.gatewayNamespace }}
   rules:
     - backendRefs:
         - name: sshjump
           port: 2222
-          
+
 {{- end }}

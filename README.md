@@ -19,7 +19,7 @@ SSHJump uses SSH public key authentication to validate users and permissions.
 Use regular SSH local forward to forward any ports from the cluster, providing the namespace and services/pods in the address:
 
 ```sh
-ssh -L8080:argocd.argocd-server:8080 -p 2222 myk8s.cluster.domain.tld
+ssh -L8080:nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 If you are authorized sshjump will connect your localhost port 8080 to the first running pod named `nginx` the namespace `nginx`.
 
@@ -28,9 +28,10 @@ If you are authorized sshjump will connect your localhost port 8080 to the first
 ### Dynamic with UI
 You can use the dynamic host selector:
 ```sh
-ssh -L8080:sshjump:0 -p 2222 myk8s.cluster.domain.tld
+ssh -L8080:sshjump:1 -p 2222 myk8s.cluster.domain.tld
 ```
 It will display a UI in the terminal for you to select the target.
+Note that the port after the `:` is not important, since it will be set dynamically in the TUI window.
 
 ### Static Target
 You can target specific services or pods using the  `srv` or `pod` prefixes, if you don't set a prefix, it defaults to pods.
@@ -170,7 +171,7 @@ There is a `Dockerfile` to be used with Docker & Podman too.
 - [X] reload config on changes
 - [ ] config map example
 - [X] kubernetes example
-- [ ] helm example
+- [X] helm template
 - [X] tailscale
 - [ ] network policies
 - [ ] add a sshsession id for tracking in logs

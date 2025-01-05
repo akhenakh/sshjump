@@ -4,8 +4,11 @@ metadata:
   name: sshjump-config-cm
   namespace: {{ .Release.Namespace }}
 data:
+  {{- if .Values.sshjumpConfig }}
   config.yaml: |
-    {{ .Values.sshjumpConfig | toYaml | indent 4 }}
+{{ .Values.sshjumpConfig | toYaml | indent 4 }}
+  {{- end }}
+  {{- if .Values.private_key }}
   key.rsa: |
-    {{ .Values.private_key | indent 4}}
-
+{{ .Values.private_key | indent 4 }}
+  {{- end }}s

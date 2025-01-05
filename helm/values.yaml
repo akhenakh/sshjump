@@ -1,0 +1,14 @@
+image: akhenakh/sshjump:0.1 # Default image
+sshjumpConfig:
+  version: core.sshjump.dev/v1
+  permissions: [] # Default empty permissions
+private_key: "" # Private key content
+tcpRoute:
+  enabled: false # Enable/disable the TCP Route
+  gatewayNamespace: envoy-gateway-system # Default gateway namespace
+  gatewayName: eg # Default gateway name
+serviceAccount:
+  create: true # create a service account
+  name: sshjump-reader-sa
+metrics:
+  enabled: true
