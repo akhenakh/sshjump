@@ -1,9 +1,9 @@
 package main
 
 import (
-
 	"context"
-
+	"log/slog"
+	"time"
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -21,7 +21,9 @@ type model struct {
 	ready    bool
 	user     string
 	quitting bool
+	dump     bool
 	bg       string
+	logger   *slog.Logger
 	docStyle lipgloss.Style
 }
 
@@ -49,12 +51,10 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	// txtStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
 	// quitStyle := renderer.NewStyle().Foreground(lipgloss.Color("8"))
 
-
 	bg := "light"
 	if renderer.HasDarkBackground() {
 		bg = "dark"
 	}
-
 
 	// Get available ports
 	ports, err := srv.KubernetesPortsForUser(context.Background(), s.User())
@@ -91,37 +91,15 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		Padding(0, 1)
 
 	m := model{
-		term:        pty.Term,
-		profile:     renderer.ColorProfile().Name(),
-		width:       pty.Window.Width,
-		height:      pty.Window.Height,
-		bg:          bg,
-		docStyle:    docStyle,
-		user:        s.User(),
-		logger:      srv.logger,
-		currentPort: currentPort,
-		list:        list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		bg:       bg,
+		docStyle: docStyle,
+		user:     s.User(),
+		list:     list.New(nil, list.NewDefaultDelegate(), 0, 0),
+		logger:   srv.logger,
 	}
 	m.list.Title = "Available Connections"
 
 	return &m, []tea.ProgramOption{tea.WithAltScreen()}
-}
-
-<<<<<<< HEAD
-// Just a generic tea.Model to demo terminal information of ssh.
-type model struct {
-	term           string
-	profile        string
-	width          int
-	height         int
-	bg             string
-	user           string
-	logger         *slog.Logger
-	currentPort    Port
-	availablePorts Ports
-	docStyle       lipgloss.Style
-	list           list.Model
-	dump           bool
 }
 
 func (m *model) Init() tea.Cmd {
@@ -177,14 +155,4 @@ func StructuredMiddlewareWithLogger(logger *slog.Logger) wish.Middleware {
 			)
 		}
 	}
-
-func (m model) View() string {
-	if m.quitting {
-		return "Goodbye!\n"
-	}
-	if !m.ready {
-		return "\n  Initializing..."
-	}
-	return docStyle.Render(m.list.View())
-
 }
