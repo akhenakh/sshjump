@@ -1,8 +1,9 @@
 package main
 
 import (
-	"log/slog"
-	"time"
+
+	"context"
+
 
 	"github.com/charmbracelet/bubbles/list"
 	tea "github.com/charmbracelet/bubbletea"
@@ -12,6 +13,17 @@ import (
 	"github.com/charmbracelet/wish/bubbletea"
 	"github.com/davecgh/go-spew/spew"
 )
+
+var docStyle = lipgloss.NewStyle().Margin(1, 2)
+
+type model struct {
+	list     list.Model
+	ready    bool
+	user     string
+	quitting bool
+	bg       string
+	docStyle lipgloss.Style
+}
 
 // You can wire any Bubble Tea model up to the middleware with a function that
 // handles the incoming ssh.Session. Here we just grab the terminal info and
@@ -34,14 +46,49 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	// your Bubble Tea model.
 	renderer := bubbletea.MakeRenderer(s)
 	docStyle := renderer.NewStyle().Margin(1, 2)
+	// txtStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
+	// quitStyle := renderer.NewStyle().Foreground(lipgloss.Color("8"))
+
 
 	bg := "light"
 	if renderer.HasDarkBackground() {
 		bg = "dark"
 	}
 
-	// get the current targeted port
-	currentPort := s.Context().Value(portContextKey).(Port) //nolint:forcetypeassert
+
+	// Get available ports
+	ports, err := srv.KubernetesPortsForUser(context.Background(), s.User())
+	if err != nil {
+		srv.logger.Error("failed to get ports for user", "error", err)
+		ports = Ports{}
+	}
+
+	// Convert ports to list items
+	items := []list.Item{}
+	for _, p := range ports {
+		if p.service != "" {
+			items = append(items, portItem{
+				port:     p,
+				user:     s.User(),
+				itemType: "service",
+			})
+		} else {
+			items = append(items, portItem{
+				port:     p,
+				user:     s.User(),
+				itemType: "pod",
+			})
+		}
+	}
+
+	// Create new list
+	l := list.New(items, list.NewDefaultDelegate(), pty.Window.Width, pty.Window.Height-4)
+	l.Title = "Available Ports"
+	l.SetShowHelp(true)
+	l.Styles.Title = renderer.NewStyle().
+		Background(lipgloss.Color("62")).
+		Foreground(lipgloss.Color("230")).
+		Padding(0, 1)
 
 	m := model{
 		term:        pty.Term,
@@ -60,6 +107,7 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return &m, []tea.ProgramOption{tea.WithAltScreen()}
 }
 
+<<<<<<< HEAD
 // Just a generic tea.Model to demo terminal information of ssh.
 type model struct {
 	term           string
@@ -85,19 +133,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logger.Debug("update", "msg", spew.Sdump(msg))
 	}
 	switch msg := msg.(type) {
-
-	case tea.WindowSizeMsg:
-		h, v := m.docStyle.GetFrameSize()
-		m.list.SetSize(msg.Width-h, msg.Height-v)
-
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
+			m.quitting = true
 			return m, tea.Quit
 		}
+
+	case tea.WindowSizeMsg:
+		h, v := docStyle.GetFrameSize()
+		m.list.SetSize(msg.Width-h, msg.Height-v)
 	}
 
-	return m, nil
+	var cmd tea.Cmd
+	m.list, cmd = m.list.Update(msg)
+	return m, cmd
 }
 
 func (m *model) View() string {
@@ -127,4 +177,14 @@ func StructuredMiddlewareWithLogger(logger *slog.Logger) wish.Middleware {
 			)
 		}
 	}
+
+func (m model) View() string {
+	if m.quitting {
+		return "Goodbye!\n"
+	}
+	if !m.ready {
+		return "\n  Initializing..."
+	}
+	return docStyle.Render(m.list.View())
+
 }
