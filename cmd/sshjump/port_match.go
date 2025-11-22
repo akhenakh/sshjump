@@ -14,71 +14,93 @@ type Port struct {
 type Ports []Port
 
 func (ps Ports) MatchingService(name, namespace string, port int32) (string, bool) {
-	for _, ps := range ps {
-		if ps.namespace == namespace && ps.service == name && ps.port == port {
-			return fmt.Sprintf("%s:%d", ps.addr, ps.port), true
+	for _, p := range ps {
+		if p.namespace == namespace && p.service == name && p.port == port {
+			// The address is already formatted by Allowed()
+			return p.addr, true
 		}
 	}
-
 	return "", false
 }
 
 func (ps Ports) MatchingPod(name, namespace string, port int32) (string, bool) {
-	for _, ps := range ps {
-		if ps.namespace == namespace && ps.pod == name && ps.port == port {
-			return fmt.Sprintf("%s:%d", ps.addr, ps.port), true
+	for _, p := range ps {
+		if p.namespace == namespace && p.pod == name && p.port == port {
+			// The address is already formatted by Allowed()
+			return p.addr, true
 		}
 	}
-
 	return "", false
 }
 
 // Allowed filter list of ports using user permissions.
+// It also ensures the Port.addr field is formatted as "host:port" for connectability.
 func Allowed(ports Ports, userPerms Permission) Ports {
+	// Optimization: Pre-calculate strings or use logic inside loop
+	if userPerms.AllowAll {
+		// We must return a new slice where addresses are formatted
+		allowed := make([]Port, len(ports))
+		for i, p := range ports {
+			p.addr = fmt.Sprintf("%s:%d", p.addr, p.port)
+			allowed[i] = p
+		}
+		return allowed
+	}
+
+	// Pre-process permissions into a lookup map for O(1) access
+	// Map Key: "namespace" -> Permission Config for that namespace
+	nsPerms := make(map[string]Namespace)
+	for _, ns := range userPerms.Namespaces {
+		nsPerms[ns.Namespace] = ns
+	}
+
 	var allowed []Port
 
 	for _, port := range ports {
-		fullAccess := userPerms.AllowAll
-		if fullAccess {
-			for _, p := range ports {
-				allowed = append(allowed, p)
-			}
-
-			return allowed
+		perm, exists := nsPerms[port.namespace]
+		if !exists {
+			continue
 		}
 
-		for _, userNs := range userPerms.Namespaces {
-			if userNs.Namespace == port.namespace {
-				// check if user got the full access to the namespace no restriction
-				if len(userNs.Pods) == 0 {
-					allowed = append(allowed, port)
+		// If namespace exists in permissions but has no specific pod/service restrictions,
+		// it implies full access to that namespace.
+		if len(perm.Pods) == 0 && len(perm.Services) == 0 {
+			port.addr = fmt.Sprintf("%s:%d", port.addr, port.port)
+			allowed = append(allowed, port)
+			continue
+		}
 
-					continue
-				}
-
-				// check for pods & services
-				for _, uPod := range userNs.Pods {
-					for _, up := range uPod.Ports {
-						if addr, ok := ports.MatchingPod(uPod.Name, userNs.Namespace, up); ok {
-							port.addr = addr
+		// Check specific Pods
+		if port.pod != "" {
+			for _, p := range perm.Pods {
+				if p.Name == port.pod {
+					for _, allowedPort := range p.Ports {
+						if allowedPort == port.port {
+							port.addr = fmt.Sprintf("%s:%d", port.addr, port.port)
 							allowed = append(allowed, port)
-
-							continue
-						}
-					}
-				}
-				for _, uService := range userNs.Services {
-					for _, up := range uService.Ports {
-						if addr, ok := ports.MatchingService(uService.Name, userNs.Namespace, up); ok || fullAccess {
-							port.addr = addr
-							allowed = append(allowed, port)
-
-							continue
+							goto NextPort // Break out of nested loops for this port
 						}
 					}
 				}
 			}
 		}
+
+		// Check specific Services
+		if port.service != "" {
+			for _, s := range perm.Services {
+				if s.Name == port.service {
+					for _, allowedPort := range s.Ports {
+						if allowedPort == port.port {
+							port.addr = fmt.Sprintf("%s:%d", port.addr, port.port)
+							allowed = append(allowed, port)
+							goto NextPort
+						}
+					}
+				}
+			}
+		}
+
+	NextPort:
 	}
 
 	return allowed

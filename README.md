@@ -143,7 +143,14 @@ Pass the key in a file (from secret or configmaps) using the env variable `TS_AU
 ## Features
 
 
+## End to End Testing
 
+```sh  
+CONTAINER_RUNTIME=podman go test -tags e2e -v -timeout 5m ./test/e2e/
+```
+
+Add env `SKIP_TEARDOWN=true` to debug the kind in case of errors.
+  
 
 ## Image Build
 

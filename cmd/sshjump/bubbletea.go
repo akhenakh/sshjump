@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
@@ -14,135 +16,208 @@ import (
 	"github.com/davecgh/go-spew/spew"
 )
 
-var docStyle = lipgloss.NewStyle().Margin(1, 2)
+// Enum for UI state management
+type state int
+
+const (
+	stateLoading state = iota
+	stateList
+	stateSelected
+)
 
 type model struct {
+	state    state
 	list     list.Model
-	ready    bool
+	spinner  spinner.Model
 	user     string
-	quitting bool
-	dump     bool
-	bg       string
-	logger   *slog.Logger
+	server   *Server
+	err      error
+	selected *portItem
+
+	// Styles
+	renderer *lipgloss.Renderer
 	docStyle lipgloss.Style
+	cmdStyle lipgloss.Style
+
+	width  int
+	height int
+	dump   bool
+	logger *slog.Logger
 }
 
-// You can wire any Bubble Tea model up to the middleware with a function that
-// handles the incoming ssh.Session. Here we just grab the terminal info and
-// pass it to the new model. You can also return tea.ProgramOptions (such as
-// tea.WithAltScreen) on a session by session basis.
+// Define custom messages
+type portsLoadedMsg []list.Item
+type errMsg error
+
 func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	userConnections.WithLabelValues(s.User()).Inc()
-
-	// This should never fail, as we are using the activeterm middleware.
 	pty, _, _ := s.Pty()
 
-	// When running a Bubble Tea app over SSH, you shouldn't use the default
-	// lipgloss.NewStyle function.
-	// That function will use the color profile from the os.Stdin, which is the
-	// server, not the client.
-	// We provide a MakeRenderer function in the bubbletea middleware package,
-	// so you can easily get the correct renderer for the current session, and
-	// use it to create the styles.
-	// The recommended way to use these styles is to then pass them down to
-	// your Bubble Tea model.
 	renderer := bubbletea.MakeRenderer(s)
-	docStyle := renderer.NewStyle().Margin(1, 2)
-	// txtStyle := renderer.NewStyle().Foreground(lipgloss.Color("10"))
-	// quitStyle := renderer.NewStyle().Foreground(lipgloss.Color("8"))
 
-	bg := "light"
-	if renderer.HasDarkBackground() {
-		bg = "dark"
-	}
+	// Initialize spinner
+	sp := spinner.New()
+	sp.Spinner = spinner.Dot
+	sp.Style = renderer.NewStyle().Foreground(lipgloss.Color("205"))
 
-	// Get available ports
-	ports, err := srv.KubernetesPortsForUser(context.Background(), s.User())
-	if err != nil {
-		srv.logger.Error("failed to get ports for user", "error", err)
-		ports = Ports{}
-	}
-
-	// Convert ports to list items
-	items := []list.Item{}
-	for _, p := range ports {
-		if p.service != "" {
-			items = append(items, portItem{
-				port:     p,
-				user:     s.User(),
-				itemType: "service",
-			})
-		} else {
-			items = append(items, portItem{
-				port:     p,
-				user:     s.User(),
-				itemType: "pod",
-			})
-		}
-	}
-
-	// Create new list
-	l := list.New(items, list.NewDefaultDelegate(), pty.Window.Width, pty.Window.Height-4)
-	l.Title = "Available Ports"
-	l.SetShowHelp(true)
+	// Initialize list (empty initially)
+	l := list.New([]list.Item{}, list.NewDefaultDelegate(), pty.Window.Width, pty.Window.Height-4)
+	l.Title = "Available Connections"
 	l.Styles.Title = renderer.NewStyle().
 		Background(lipgloss.Color("62")).
 		Foreground(lipgloss.Color("230")).
 		Padding(0, 1)
 
 	m := model{
-		bg:       bg,
-		docStyle: docStyle,
+		state:    stateLoading,
 		user:     s.User(),
+		server:   srv,
 		list:     l,
+		spinner:  sp,
 		logger:   srv.logger,
-		ready:    true,
+		renderer: renderer,
+		docStyle: renderer.NewStyle().Margin(1, 2),
+		cmdStyle: renderer.NewStyle().
+			Foreground(lipgloss.Color("#04B575")).
+			Background(lipgloss.Color("#252525")).
+			Padding(1, 2).
+			MarginTop(1),
+		width:  pty.Window.Width,
+		height: pty.Window.Height,
 	}
-	m.list.Title = "Available Connections"
 
 	return &m, []tea.ProgramOption{tea.WithAltScreen()}
 }
 
+// Command to load data asynchronously
+func fetchPorts(user string, srv *Server) tea.Cmd {
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		ports, err := srv.KubernetesPortsForUser(ctx, user)
+		if err != nil {
+			return errMsg(err)
+		}
+
+		items := []list.Item{}
+		for _, p := range ports {
+			itemType := "pod"
+			if p.service != "" {
+				itemType = "service"
+			}
+			items = append(items, portItem{
+				port:     p,
+				user:     user,
+				itemType: itemType,
+			})
+		}
+		return portsLoadedMsg(items)
+	}
+}
+
 func (m *model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(
+		m.spinner.Tick,
+		fetchPorts(m.user, m.server),
+	)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.dump {
 		m.logger.Debug("update", "msg", spew.Sdump(msg))
 	}
+
+	var cmds []tea.Cmd
+	var cmd tea.Cmd
+
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
-			m.quitting = true
 			return m, tea.Quit
+		case "esc":
+			if m.state == stateSelected {
+				m.state = stateList
+				m.selected = nil
+				return m, nil
+			}
+			return m, tea.Quit
+		case "enter":
+			if m.state == stateList {
+				i, ok := m.list.SelectedItem().(portItem)
+				if ok {
+					m.selected = &i
+					m.state = stateSelected
+				}
+			}
 		}
 
 	case tea.WindowSizeMsg:
-		h, v := docStyle.GetFrameSize()
+		m.width = msg.Width
+		m.height = msg.Height
+		h, v := m.docStyle.GetFrameSize()
 		m.list.SetSize(msg.Width-h, msg.Height-v)
+
+	case portsLoadedMsg:
+		m.list.SetItems(msg)
+		m.state = stateList
+		// Stop spinner
+		return m, nil
+
+	case errMsg:
+		m.err = msg
+		return m, tea.Quit
 	}
 
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	// Model Logic based on State
+	switch m.state {
+	case stateLoading:
+		m.spinner, cmd = m.spinner.Update(msg)
+		cmds = append(cmds, cmd)
+
+	case stateList:
+		m.list, cmd = m.list.Update(msg)
+		cmds = append(cmds, cmd)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
 func (m *model) View() string {
-	if m.quitting {
-		return "Goodbye!\n"
+	if m.err != nil {
+		return fmt.Sprintf("Error: %v\nPress q to quit.", m.err)
 	}
-	if !m.ready {
-		return "\n  Initializing..."
+
+	switch m.state {
+	case stateLoading:
+		return m.docStyle.Render(fmt.Sprintf("%s Loading Kubernetes resources...", m.spinner.View()))
+
+	case stateSelected:
+		if m.selected == nil {
+			return ""
+		}
+
+		header := m.renderer.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("205")).
+			Render(fmt.Sprintf("Forwarding to %s", m.selected.Title()))
+
+		desc := fmt.Sprintf("To access this %s, run the following command in a new terminal:", m.selected.itemType)
+
+		// Construct the command string
+		cmdStr := m.selected.Description()
+
+		content := fmt.Sprintf("%s\n\n%s\n%s\n\nPress esc to back.", header, desc, m.cmdStyle.Render(cmdStr))
+
+		return m.docStyle.Render(content)
+
+	default:
+		return m.docStyle.Render(m.list.View())
 	}
-	return m.docStyle.Render(m.list.View())
 }
 
-// StructuredMiddlewareWithLogger provides basic connection logging in a structured form.
-// Connects are logged with the remote address, invoked command, TERM setting,
-// window dimensions, client version, and if the auth was public key based.
-// Disconnect will log the remote address and connection duration.
+// StructuredMiddlewareWithLogger implementation (same as before)
 func StructuredMiddlewareWithLogger(logger *slog.Logger) wish.Middleware {
 	return func(next ssh.Handler) ssh.Handler {
 		return func(sess ssh.Session) {
