@@ -33,7 +33,7 @@ ssh -L8080:sshjump:1 -p 2222 myk8s.cluster.domain.tld
 It will display a UI in the terminal for you to select the target.
 Note that the port after the `:` is not important, since it will be set dynamically in the TUI window.
 
-![sshjump ui](/img/term2.png)
+![sshjump ui](/img/term1.png)
 ![sshjump ui](/img/term2.png)
 
 ### Static Target
