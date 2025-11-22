@@ -33,6 +33,9 @@ ssh -L8080:sshjump:1 -p 2222 myk8s.cluster.domain.tld
 It will display a UI in the terminal for you to select the target.
 Note that the port after the `:` is not important, since it will be set dynamically in the TUI window.
 
+![sshjump ui](/img/term2.png)
+![sshjump ui](/img/term2.png)
+
 ### Static Target
 You can target specific services or pods using the  `srv` or `pod` prefixes, if you don't set a prefix, it defaults to pods.
 
@@ -148,13 +151,17 @@ Pass the key in a file (from secret or configmaps) using the env variable `TS_AU
 ```sh  
 CONTAINER_RUNTIME=podman go test -tags e2e -v -timeout 5m ./test/e2e/
 ```
+On Linux, with podman you may have to create the cluster manually.
+```sh
+systemd-run --scope --user -p "Delegate=yes" kind create cluster -n sshjump-e2e
+```
 
 Add env `SKIP_TEARDOWN=true` to debug the kind in case of errors.
 
 To reach SSHJump, the private key of the user will be displayed on screen:  
 ```sh
 k -n sshjump port-forward sshjump-55f55c569c-sf8t9 2222:2222
-ssh -i test.key -p 2222 -v localhost 
+ssh -i test.key -p 2222 -v testuser@localhost 
 kind delete  cluster -n sshjump-e2e  
 ```
 
