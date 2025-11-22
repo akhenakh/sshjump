@@ -128,12 +128,10 @@ func (srv *Server) DirectTCPIPHandler(
 		return
 	}
 
-	// --- DYNAMIC FORWARDING LOGIC ---
 	if d.DestPort == 1 {
 		srv.handleDynamicForward(newChan, ctx, d)
 		return
 	}
-	// --------------------------------
 
 	// Standard Static Forwarding
 	srv.handleStaticForward(newChan, ctx, d)
@@ -141,10 +139,11 @@ func (srv *Server) DirectTCPIPHandler(
 
 func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Context, d localForwardChannelData) {
 	logger := srv.logger.With(slog.String("type", "dynamic"), slog.String("user", ctx.User()))
-	logger.Info("dynamic forward request waiting for selection")
 
-	targetCh := GetTargetChannel(ctx)
+	resolver := GetTargetResolver(ctx)
 
+	// We must accept the channel first, or the SSH client might timeout
+	// while the user is picking a target in the TUI.
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		logger.Error("failed to accept channel", "error", err)
@@ -152,19 +151,26 @@ func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Contex
 	}
 	go gossh.DiscardRequests(reqs)
 
-	var targetAddr string
+	// Wait for the TUI to populate the target
 	select {
-	case targetAddr = <-targetCh:
-		logger.Info("target selected via TUI", "target", targetAddr)
+	case <-resolver.Resolved:
+		// Target is ready
 	case <-ctx.Done():
 		ch.Close()
 		return
 	case <-time.After(2 * time.Minute):
+		logger.Warn("timeout waiting for TUI selection")
 		ch.Close()
 		return
 	}
 
+	// Read the target safely
+	resolver.mu.RLock()
+	targetAddr := resolver.target
+	resolver.mu.RUnlock()
+
 	if targetAddr == "" {
+		logger.Error("resolved target is empty")
 		ch.Close()
 		return
 	}

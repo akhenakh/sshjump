@@ -41,12 +41,12 @@ You can target specific services or pods using the  `svc` or `pod` prefixes, if 
 
 Will forward to the `nginx` Kubernetes service.
 ```sh
-ssh -L8080:svc.nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
+ssh -L8080:svc.mynamespace.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
 Will forward to the first pod named `nginx` Kubernetes service.
 ```sh
-ssh -L8080:nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
+ssh -L8080:mynamespace.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
 You can specify the namespace by prefixing the forward address with the namespace.

@@ -37,7 +37,7 @@ type model struct {
 	// For static forwards
 	connectedTarget string
 
-	targetChan chan string
+	resolver   *TargetResolver
 	statusChan chan string
 
 	renderer    *lipgloss.Renderer
@@ -71,7 +71,7 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		Foreground(lipgloss.Color("230")).
 		Padding(0, 1)
 
-	targetChan := GetTargetChannel(s.Context())
+	resolver := GetTargetResolver(s.Context())
 	statusChan := GetStatusChannel(s.Context())
 
 	m := model{
@@ -82,7 +82,7 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		spinner:    sp,
 		logger:     srv.logger,
 		renderer:   renderer,
-		targetChan: targetChan,
+		resolver:   resolver,
 		statusChan: statusChan,
 		docStyle:   renderer.NewStyle().Margin(1, 2),
 		statusStyle: renderer.NewStyle().
@@ -159,10 +159,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = &i
 					m.state = stateConnected
 
-					realAddr := fmt.Sprintf("%s:%d", i.port.addr, i.port.port)
-					go func() {
-						m.targetChan <- realAddr
-					}()
+					// FIX: i.port.addr is already "IP:PORT", so we do NOT append port again.
+					realAddr := i.port.addr
+
+					// Store the target safely
+					m.resolver.mu.Lock()
+					m.resolver.target = realAddr
+					m.resolver.mu.Unlock()
+
+					// Signal readiness to all waiting connections
+					select {
+					case <-m.resolver.Resolved:
+						// Already closed
+					default:
+						close(m.resolver.Resolved)
+					}
 				}
 			}
 		}
@@ -175,17 +186,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case portsLoadedMsg:
 		m.list.SetItems(msg)
-		// Only switch to list view if we haven't already connected (e.g. fast static connect)
 		if m.state == stateLoading {
 			m.state = stateList
 		}
 		return m, nil
 
 	case connectionEstablishedMsg:
-		// Static forward detected!
 		m.connectedTarget = string(msg)
 		m.state = stateConnected
-		// Keep waiting in case other tunnels open, though we only display the last one for now
 		return m, waitForStatus(m.statusChan)
 
 	case errMsg:
@@ -216,17 +224,15 @@ func (m *model) View() string {
 		return m.docStyle.Render(fmt.Sprintf("%s Loading Kubernetes resources...", m.spinner.View()))
 
 	case stateConnected:
-		// Determine display title based on how we connected (dynamic selection vs static)
 		var title, details string
 
 		if m.connectedTarget != "" {
-			// Static Forward
 			title = fmt.Sprintf("✔ Active Tunnel: %s", m.connectedTarget)
 			details = "Traffic is active on your static forward.\n\n(Multiple forwards may be active)"
 		} else if m.selected != nil {
-			// Dynamic Selection
 			title = fmt.Sprintf("✔ Connected to %s", m.selected.Title())
-			details = fmt.Sprintf("Tunnel target set to: %s:%d", m.selected.port.addr, m.selected.port.port)
+			// FIX: Just display addr, it already contains the port
+			details = fmt.Sprintf("Tunnel target set to: %s", m.selected.port.addr)
 		} else {
 			title = "✔ Connected"
 		}

@@ -16,7 +16,8 @@ func (i portItem) Title() string {
 }
 
 func (i portItem) Description() string {
-	return fmt.Sprintf("Remote: %s:%d", i.port.addr, i.port.port)
+	// i.port.addr is already "ip:port"
+	return fmt.Sprintf("Remote: %s", i.port.addr)
 }
 
 func (i portItem) FilterValue() string {

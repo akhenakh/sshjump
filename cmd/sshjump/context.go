@@ -1,22 +1,33 @@
 package main
 
 import (
+	"sync"
+
 	"github.com/charmbracelet/ssh"
 )
 
 const (
-	targetChanKey = "target_channel"
+	resolverKey   = "target_resolver"
 	statusChanKey = "status_channel"
 )
 
-// GetTargetChannel returns the channel used for Dynamic selection (TUI -> Forwarder).
-func GetTargetChannel(ctx ssh.Context) chan string {
-	if val := ctx.Value(targetChanKey); val != nil {
-		return val.(chan string)
+// TargetResolver acts as a thread-safe store for the user's selection.
+type TargetResolver struct {
+	mu       sync.RWMutex
+	target   string
+	Resolved chan struct{} // Closed when a target is selected
+}
+
+// GetTargetResolver returns the resolver state object for this session.
+func GetTargetResolver(ctx ssh.Context) *TargetResolver {
+	if val := ctx.Value(resolverKey); val != nil {
+		return val.(*TargetResolver)
 	}
-	ch := make(chan string, 1)
-	ctx.SetValue(targetChanKey, ch)
-	return ch
+	tr := &TargetResolver{
+		Resolved: make(chan struct{}),
+	}
+	ctx.SetValue(resolverKey, tr)
+	return tr
 }
 
 // GetStatusChannel returns the channel used for Static notification (Forwarder -> TUI).
