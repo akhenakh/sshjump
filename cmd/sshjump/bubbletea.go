@@ -16,13 +16,13 @@ import (
 	"github.com/davecgh/go-spew/spew"
 )
 
-// Enum for UI state management
 type state int
 
 const (
 	stateLoading state = iota
 	stateList
-	stateSelected
+	stateConnected
+	stateError
 )
 
 type model struct {
@@ -34,10 +34,12 @@ type model struct {
 	err      error
 	selected *portItem
 
-	// Styles
-	renderer *lipgloss.Renderer
-	docStyle lipgloss.Style
-	cmdStyle lipgloss.Style
+	// Channel to signal the SSH forwarder
+	targetChan chan string
+
+	renderer    *lipgloss.Renderer
+	docStyle    lipgloss.Style
+	statusStyle lipgloss.Style
 
 	width  int
 	height int
@@ -45,7 +47,6 @@ type model struct {
 	logger *slog.Logger
 }
 
-// Define custom messages
 type portsLoadedMsg []list.Item
 type errMsg error
 
@@ -55,33 +56,35 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 
 	renderer := bubbletea.MakeRenderer(s)
 
-	// Initialize spinner
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
 	sp.Style = renderer.NewStyle().Foreground(lipgloss.Color("205"))
 
-	// Initialize list (empty initially)
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), pty.Window.Width, pty.Window.Height-4)
-	l.Title = "Available Connections"
+	l.Title = "Select a target to Connect"
 	l.Styles.Title = renderer.NewStyle().
 		Background(lipgloss.Color("62")).
 		Foreground(lipgloss.Color("230")).
 		Padding(0, 1)
 
+	// Get the communication channel from the context
+	targetChan := GetTargetChannel(s.Context())
+
 	m := model{
-		state:    stateLoading,
-		user:     s.User(),
-		server:   srv,
-		list:     l,
-		spinner:  sp,
-		logger:   srv.logger,
-		renderer: renderer,
-		docStyle: renderer.NewStyle().Margin(1, 2),
-		cmdStyle: renderer.NewStyle().
-			Foreground(lipgloss.Color("#04B575")).
-			Background(lipgloss.Color("#252525")).
-			Padding(1, 2).
-			MarginTop(1),
+		state:      stateLoading,
+		user:       s.User(),
+		server:     srv,
+		list:       l,
+		spinner:    sp,
+		logger:     srv.logger,
+		renderer:   renderer,
+		targetChan: targetChan,
+		docStyle:   renderer.NewStyle().Margin(1, 2),
+		statusStyle: renderer.NewStyle().
+			Foreground(lipgloss.Color("#FFFFFF")).
+			Background(lipgloss.Color("#04B575")).
+			Bold(true).
+			Padding(1, 2),
 		width:  pty.Window.Width,
 		height: pty.Window.Height,
 	}
@@ -89,7 +92,6 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	return &m, []tea.ProgramOption{tea.WithAltScreen()}
 }
 
-// Command to load data asynchronously
 func fetchPorts(user string, srv *Server) tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -135,20 +137,25 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
-			return m, tea.Quit
-		case "esc":
-			if m.state == stateSelected {
-				m.state = stateList
-				m.selected = nil
-				return m, nil
-			}
+			// If we are connected, we shouldn't close the app with 'q',
+			// as it kills the forwarder. Force Ctrl+C or keep it running.
+			// For now, let's allow quit, which kills the tunnel.
 			return m, tea.Quit
 		case "enter":
 			if m.state == stateList {
 				i, ok := m.list.SelectedItem().(portItem)
 				if ok {
 					m.selected = &i
-					m.state = stateSelected
+					m.state = stateConnected
+
+					// Send the real address to the SSH Forwarder handler
+					// This unblocks the DirectTCPIPHandler
+					realAddr := fmt.Sprintf("%s:%d", i.port.addr, i.port.port)
+
+					// Send in a goroutine to avoid blocking UI if channel is full (unlikely)
+					go func() {
+						m.targetChan <- realAddr
+					}()
 				}
 			}
 		}
@@ -162,20 +169,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case portsLoadedMsg:
 		m.list.SetItems(msg)
 		m.state = stateList
-		// Stop spinner
 		return m, nil
 
 	case errMsg:
 		m.err = msg
-		return m, tea.Quit
+		m.state = stateError
+		return m, nil
 	}
 
-	// Model Logic based on State
 	switch m.state {
 	case stateLoading:
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
-
 	case stateList:
 		m.list, cmd = m.list.Update(msg)
 		cmds = append(cmds, cmd)
@@ -185,56 +190,51 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) View() string {
-	if m.err != nil {
-		return fmt.Sprintf("Error: %v\nPress q to quit.", m.err)
+	if m.state == stateError {
+		return m.docStyle.Render(fmt.Sprintf("Error: %v\nPress q to quit.", m.err))
 	}
 
 	switch m.state {
 	case stateLoading:
 		return m.docStyle.Render(fmt.Sprintf("%s Loading Kubernetes resources...", m.spinner.View()))
 
-	case stateSelected:
+	case stateConnected:
 		if m.selected == nil {
 			return ""
 		}
 
-		header := m.renderer.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("205")).
-			Render(fmt.Sprintf("Forwarding to %s", m.selected.Title()))
+		title := fmt.Sprintf("✔ Connected to %s", m.selected.Title())
 
-		desc := fmt.Sprintf("To access this %s, run the following command in a new terminal:", m.selected.itemType)
+		// We cannot know the user's local port (e.g., -L 8082:...), so we provide a generic message.
+		content := fmt.Sprintf(`
+Tunnel target set to:
+%s
 
-		// Construct the command string
-		cmdStr := m.selected.Description()
+You can now connect to your local forwarded port.
+(The connection will hang until you initiate traffic locally)
 
-		content := fmt.Sprintf("%s\n\n%s\n%s\n\nPress esc to back.", header, desc, m.cmdStyle.Render(cmdStr))
+Press 'q' or Ctrl+C to disconnect.
+`, m.statusStyle.Render(fmt.Sprintf("%s:%d", m.selected.port.addr, m.selected.port.port)))
 
-		return m.docStyle.Render(content)
+		return m.docStyle.Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				m.renderer.NewStyle().Bold(true).Foreground(lipgloss.Color("205")).Render(title),
+				content,
+			),
+		)
 
 	default:
 		return m.docStyle.Render(m.list.View())
 	}
 }
 
-// StructuredMiddlewareWithLogger implementation (same as before)
 func StructuredMiddlewareWithLogger(logger *slog.Logger) wish.Middleware {
 	return func(next ssh.Handler) ssh.Handler {
 		return func(sess ssh.Session) {
 			ct := time.Now()
-			logger.Info(
-				"connect",
-				"user", sess.User(),
-				"remote-addr", sess.RemoteAddr().String(),
-				"client-version", sess.Context().ClientVersion(),
-			)
+			logger.Info("connect", "user", sess.User(), "remote", sess.RemoteAddr().String())
 			next(sess)
-			logger.Info(
-				"disconnect",
-				"user", sess.User(),
-				"remote-addr", sess.RemoteAddr().String(),
-				"duration", time.Since(ct),
-			)
+			logger.Info("disconnect", "user", sess.User(), "duration", time.Since(ct))
 		}
 	}
 }

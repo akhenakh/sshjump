@@ -56,8 +56,11 @@ func TestE2E(t *testing.T) {
 	buildAndLoadImage(t)
 
 	// Generate Keys
-	userPrivKey, userPubKey := generateSSHKeys(t)
-	hostPrivKey, _ := generateSSHKeys(t)
+	userPrivKey, userPubKey, userPrivKeyPEM := generateSSHKeys(t)
+	hostPrivKey, _, _ := generateSSHKeys(t)
+
+	// PRINT THE KEY FOR MANUAL USAGE
+	t.Logf("\n--- USER PRIVATE KEY ---\n%s\n------------------------", userPrivKeyPEM)
 
 	// Deploy Resources
 	deployKubernetesResources(t, userPubKey, hostPrivKey)
@@ -84,7 +87,7 @@ func TestE2E(t *testing.T) {
 	})
 
 	t.Run("SSH Handshake Failure (Wrong Key)", func(t *testing.T) {
-		wrongKey, _ := generateSSHKeys(t)
+		wrongKey, _, _ := generateSSHKeys(t)
 		config := &ssh.ClientConfig{
 			User: "testuser",
 			Auth: []ssh.AuthMethod{
@@ -212,26 +215,36 @@ func buildAndLoadImage(t *testing.T) {
 	runCmd(t, "kind", "load", "image-archive", archivePath, "--name", clusterName)
 }
 
-func generateSSHKeys(t *testing.T) (ssh.Signer, string) {
+func generateSSHKeys(t *testing.T) (ssh.Signer, string, string) {
+	//  Generate RSA Key
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Private Key Signer
+	//  Generate Private Key PEM (This is what you want for ssh -i)
+	// We use PKCS#1 format which is the standard "BEGIN RSA PRIVATE KEY"
+	privPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(privateKey),
+	})
+	privateKeyPEM := string(privPEM)
+
+	// Create SSH Signer (for the Go client)
 	signer, err := ssh.NewSignerFromKey(privateKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Public Key String
+	// Generate Public Key (for authorized_keys)
 	pubKey, err := ssh.NewPublicKey(&privateKey.PublicKey)
 	if err != nil {
 		t.Fatal(err)
 	}
 	pubKeyStr := string(ssh.MarshalAuthorizedKey(pubKey))
 
-	return signer, strings.TrimSpace(pubKeyStr)
+	// Returns: Signer, AuthorizedKey format, PrivateKey PEM format
+	return signer, strings.TrimSpace(pubKeyStr), privateKeyPEM
 }
 
 func deployKubernetesResources(t *testing.T, userPubKey string, hostPrivKey ssh.Signer) {

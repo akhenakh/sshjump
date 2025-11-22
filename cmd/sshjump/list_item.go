@@ -1,9 +1,6 @@
 package main
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 type portItem struct {
 	port     Port
@@ -19,32 +16,12 @@ func (i portItem) Title() string {
 }
 
 func (i portItem) Description() string {
-	// We return the command string here
-	localPort := i.port.port
-	if localPort < 1024 {
-		localPort = 8080 // suggest safe local port if remote is privileged
-	}
-
-	target := ""
-	if i.itemType == "service" {
-		target = fmt.Sprintf("svc.%s.%s", i.port.namespace, i.port.service)
-	} else {
-		target = fmt.Sprintf("%s.%s", i.port.namespace, i.port.pod)
-	}
-
-	// Assuming sshjump hostname is 'jump-host' placeholder, user updates manually or we can inject it
-	return fmt.Sprintf("ssh -L %d:%s:%d %s@<jump-host> -p 2222",
-		localPort, target, i.port.port, i.user)
+	return fmt.Sprintf("Remote: %s:%d", i.port.addr, i.port.port)
 }
 
 func (i portItem) FilterValue() string {
-	var sb strings.Builder
-	sb.WriteString(i.port.namespace)
-	sb.WriteString("/")
 	if i.itemType == "service" {
-		sb.WriteString(i.port.service)
-	} else {
-		sb.WriteString(i.port.pod)
+		return i.port.namespace + "/" + i.port.service
 	}
-	return sb.String()
+	return i.port.namespace + "/" + i.port.pod
 }

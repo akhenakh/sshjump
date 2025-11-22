@@ -10,7 +10,7 @@ SSHJump uses SSH public key authentication to validate users and permissions.
 ![SSH Jump kangaroo logo](img/sshjump512.png?raw=true "SSH Jump logo")
 
 ## Why?
-- You don't want to give Kubernetes API access to your users for the sole purpose of TCP forward, provisioning a new user with SSHjump is basically adding a user and a key.
+- You don't want to give Kubernetes API access to your users for the sole purpose of TCP forward, provisioning a new user with SSHjump is basically adding an SSH key to a YAML file.
 - Your Kubernetes cluster may not have its API exposed publically, as a good security measure, attack surface is lowered by just exposing SSHJump access.
 
 
@@ -150,7 +150,13 @@ CONTAINER_RUNTIME=podman go test -tags e2e -v -timeout 5m ./test/e2e/
 ```
 
 Add env `SKIP_TEARDOWN=true` to debug the kind in case of errors.
-  
+
+To reach SSHJump, the private key of the user will be displayed on screen:  
+```sh
+k -n sshjump port-forward sshjump-55f55c569c-sf8t9 2222:2222
+ssh -i test.key -p 2222 -v localhost 
+kind delete  cluster -n sshjump-e2e  
+```
 
 ## Image Build
 

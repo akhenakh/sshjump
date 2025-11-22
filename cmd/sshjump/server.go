@@ -43,13 +43,9 @@ type localForwardChannelData struct {
 	OriginPort uint32
 }
 
-// TODO: parametrize.
 var (
-	IdleTimeout    = 2 * time.Minute
-	portContextKey contextKey
+	IdleTimeout = 30 * time.Minute // Increased timeout so the tunnel stays open
 )
-
-type contextKey int
 
 func NewServer(
 	logger *slog.Logger,
@@ -68,15 +64,11 @@ func NewServer(
 	sshServer, _ := wish.NewServer(
 		wish.WithMiddleware(
 			bubbletea.Middleware(jumps.teaHandler),
-			activeterm.Middleware(), // Bubble Tea apps usually require a PTY.
+			activeterm.Middleware(),
 			StructuredMiddlewareWithLogger(logger),
 		),
 		func(s *ssh.Server) error {
 			s.LocalPortForwardingCallback = func(ctx ssh.Context, bindHost string, bindPort uint32) bool {
-				// TODO: prevalidation ?
-
-				slog.Debug("Accepted forward", "host", bindHost, "port", bindPort, "user", ctx.User())
-
 				return true
 			}
 
@@ -85,11 +77,8 @@ func NewServer(
 				"session":      ssh.DefaultSessionHandler,
 			}
 
-			// Host private key
 			s.IdleTimeout = IdleTimeout
 			s.AddHostKey(privateKey)
-
-			// Users public keys
 			publicKeyOption := ssh.PublicKeyAuth(jumps.PublicKeyHandler)
 			s.SetOption(publicKeyOption)
 
@@ -102,18 +91,13 @@ func NewServer(
 	return jumps
 }
 
-// PermsForUser returns the permissions for a given user.
-// It locks the server mutex to ensure safe access to the permissions map.
 func (srv *Server) PermsForUser(user string) *Permission {
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()
-
-	// looking for a matching username
 	perm, ok := srv.permissions[user]
 	if !ok {
 		return nil
 	}
-
 	return &perm
 }
 
@@ -121,17 +105,12 @@ func (srv *Server) PublicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 	perms := srv.PermsForUser(ctx.User())
 	if perms == nil {
 		srv.logger.Warn("no such username", "username", ctx.User(), "ip", ctx.RemoteAddr().String())
-
 		return false
 	}
-
-	// validate key
 	if ssh.KeysEqual(key, perms.Key) {
 		return true
 	}
-
 	srv.logger.Warn("not matching key", "username", ctx.User(), "ip", ctx.RemoteAddr().String())
-
 	return false
 }
 
@@ -142,44 +121,100 @@ func (srv *Server) DirectTCPIPHandler(
 	newChan gossh.NewChannel,
 	ctx ssh.Context,
 ) {
-	logger := srv.logger.With(
-		slog.String("user", ctx.User()),
-	)
-
 	d := localForwardChannelData{}
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
-
 		return
 	}
 
-	logger = srv.logger.With(
+	// If the destination port is 1, we assume the user wants to select the target via TUI.
+	if d.DestPort == 1 {
+		srv.handleDynamicForward(newChan, ctx, d)
+		return
+	}
+
+	// Standard Static Forwarding
+	srv.handleStaticForward(newChan, ctx, d)
+}
+
+func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Context, d localForwardChannelData) {
+	logger := srv.logger.With(slog.String("type", "dynamic"), slog.String("user", ctx.User()))
+	logger.Info("dynamic forward request waiting for selection")
+
+	// Get the synchronization channel
+	targetCh := GetTargetChannel(ctx)
+
+	// Accept the channel immediately, but don't wire it yet.
+	// Note: Typically SSH clients expect the channel accept to mean "connected".
+	// However, we can accept it and just hang on Read/Write until we dial.
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		logger.Error("failed to accept channel", "error", err)
+		return
+	}
+	go gossh.DiscardRequests(reqs)
+
+	// Wait for the TUI to send the target address
+	var targetAddr string
+	select {
+	case targetAddr = <-targetCh:
+		logger.Info("target selected via TUI", "target", targetAddr)
+	case <-ctx.Done():
+		logger.Warn("context cancelled before target selection")
+		ch.Close()
+		return
+	case <-time.After(2 * time.Minute):
+		logger.Warn("timeout waiting for target selection")
+		ch.Close()
+		return
+	}
+
+	if targetAddr == "" {
+		ch.Close()
+		return
+	}
+
+	// Now Dial the target selected in TUI
+	userTunnels.WithLabelValues(ctx.User()).Inc()
+	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var dialer net.Dialer
+	dconn, err := dialer.DialContext(dctx, "tcp", targetAddr)
+	if err != nil {
+		logger.Error("failed to dial target", "target", targetAddr, "error", err)
+		ch.Close() // Close the SSH channel effectively resetting the connection
+		return
+	}
+
+	// Bridge
+	go func() {
+		defer ch.Close()
+		defer dconn.Close()
+		_, _ = io.Copy(ch, dconn)
+	}()
+	go func() {
+		defer ch.Close()
+		defer dconn.Close()
+		_, _ = io.Copy(dconn, ch)
+	}()
+}
+
+func (srv *Server) handleStaticForward(newChan gossh.NewChannel, ctx ssh.Context, d localForwardChannelData) {
+	logger := srv.logger.With(
+		slog.String("user", ctx.User()),
 		slog.String("host", d.DestAddr),
 		slog.Int("port", int(d.DestPort)),
 	)
 
-	logger.Debug("tcp fwd request")
-
-	if s.LocalPortForwardingCallback == nil || !s.LocalPortForwardingCallback(ctx, d.DestAddr, d.DestPort) {
-		newChan.Reject(gossh.Prohibited, "port forwarding is disabled")
-
-		return
-	}
-
 	ports, err := srv.KubernetesPortsForUser(ctx, ctx.User())
 	if err != nil {
-		newChan.Reject(gossh.ConnectionFailed, "error querying Kubernetes api: "+err.Error())
-
-		logger.Debug("error querying Kubernetes API",
-			"error", err.Error(),
-		)
-
+		newChan.Reject(gossh.ConnectionFailed, "error querying Kubernetes api")
 		return
 	}
 
 	var addr string
 	var ok bool
-
 	ds := strings.Split(d.DestAddr, ".")
 
 	switch {
@@ -191,22 +226,16 @@ func (srv *Server) DirectTCPIPHandler(
 		addr, ok = ports.MatchingPod(ds[1], ds[0], int32(d.DestPort))
 	default:
 		newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
-
 		return
 	}
 
 	if !ok {
-		newChan.Reject(gossh.ConnectionFailed, "kubernetes destination not authorized")
+		newChan.Reject(gossh.ConnectionFailed, "destination not authorized")
 		logger.Warn("destination not authorized")
-
 		return
 	}
 
-	logger.Debug("forward in progress",
-		"user", ctx.User(),
-		"addr", addr,
-	)
-
+	logger.Info("forwarding", "addr", addr)
 	userTunnels.WithLabelValues(ctx.User()).Inc()
 
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -215,23 +244,15 @@ func (srv *Server) DirectTCPIPHandler(
 	var dialer net.Dialer
 	dconn, err := dialer.DialContext(dctx, "tcp", addr)
 	if err != nil {
-		_ = newChan.Reject(gossh.ConnectionFailed, fmt.Sprintf("%s while connecting to %s", err.Error(), addr))
-
-		srv.logger.Warn("connection error",
-			"error", err.Error(),
-			"addr", addr,
-		)
-
+		newChan.Reject(gossh.ConnectionFailed, "upstream connection failed")
 		return
 	}
 
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		dconn.Close()
-
 		return
 	}
-
 	go gossh.DiscardRequests(reqs)
 
 	go func() {
@@ -246,9 +267,7 @@ func (srv *Server) DirectTCPIPHandler(
 	}()
 }
 
-// StartWatchConfig starts a file watcher to monitor for config file changes, will reload on changes.
 func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
-	// watch for file changes and issue a reload on changes
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return fmt.Errorf("can't create file watcher: %w", err)
@@ -264,30 +283,20 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 			select {
 			case <-ctx.Done():
 				srv.configWatcher.Close()
-
 				return
 			case event, ok := <-srv.configWatcher.Events:
 				if !ok {
 					return
 				}
-
-				// we watch the parent directory then filter
-				var found bool
-				if path == filepath.Base(event.Name) {
-					found = true
-				}
-				if !found {
+				if filepath.Base(event.Name) != filepath.Base(path) {
 					continue
 				}
-
 				if event.Has(fsnotify.Write) || event.Has(fsnotify.Rename) {
 					debouncer.Debounce(event, func(e fsnotify.Event) {
 						srv.logger.Info("Reloading config, on file change")
 						perms, err := readPermission(srv.logger, path)
 						if err != nil {
-							srv.logger.Error("can't reload config after change, still running on old config",
-								"error", err)
-
+							srv.logger.Error("can't reload config", "error", err)
 							return
 						}
 						srv.mu.Lock()
@@ -295,7 +304,6 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 						srv.mu.Unlock()
 					})
 				}
-
 			case err, ok := <-srv.configWatcher.Errors:
 				if !ok {
 					return
@@ -304,59 +312,28 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 			}
 		}
 	}()
-
-	// watch parent directory for atomic updates
-	err = watcher.Add(filepath.Dir(path))
-	if err != nil {
-		return fmt.Errorf("error adding config file to watcher: %w", err)
-	}
-
-	return nil
+	return watcher.Add(filepath.Dir(path))
 }
 
-// StopWatchConfig stop watching for config file changes.
 func (srv *Server) StopWatchConfig() {
 	if srv.configWatcher != nil {
 		_ = srv.configWatcher.Close()
 	}
 }
 
-// readKeys reads all the keys from the config file
-// it does not break if some keys are invalid because
-// the same function is used to reload to file it changes
-// and the system needs to keep running.
 func readKeys(logger *slog.Logger, cfg SSHJumpConfig) map[string]Permission {
 	m := make(map[string]Permission)
-	for i, perm := range cfg.Permissions {
+	for _, perm := range cfg.Permissions {
 		if perm.Username == "" {
-			logger.Warn("invalid config no username", "index", i)
-
 			continue
 		}
-
-		// testing for username duplicates
-		if _, exist := m[perm.Username]; exist {
-			logger.Warn("duplicate username entry",
-				"username", perm.Username,
-				"index", i)
-
-			continue
-		}
-
 		key, _, _, _, err := ssh.ParseAuthorizedKey([]byte(perm.AuthorizedKey))
 		if err != nil {
-			logger.Warn("invalid key",
-				"error", err,
-				"username", perm.Username,
-				"key", perm.AuthorizedKey,
-				"index", i)
-
+			logger.Warn("invalid key", "username", perm.Username)
 			continue
 		}
-
 		perm.Key = key
 		m[perm.Username] = perm
 	}
-
 	return m
 }
