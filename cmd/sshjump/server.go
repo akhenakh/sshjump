@@ -44,7 +44,7 @@ type localForwardChannelData struct {
 }
 
 var (
-	IdleTimeout = 30 * time.Minute // Increased timeout so the tunnel stays open
+	IdleTimeout = 30 * time.Minute
 )
 
 func NewServer(
@@ -68,6 +68,7 @@ func NewServer(
 			StructuredMiddlewareWithLogger(logger),
 		),
 		func(s *ssh.Server) error {
+			// Allow all local port forwarding requests initially; validation happens in handler
 			s.LocalPortForwardingCallback = func(ctx ssh.Context, bindHost string, bindPort uint32) bool {
 				return true
 			}
@@ -127,11 +128,12 @@ func (srv *Server) DirectTCPIPHandler(
 		return
 	}
 
-	// If the destination port is 1, we assume the user wants to select the target via TUI.
+	// --- DYNAMIC FORWARDING LOGIC ---
 	if d.DestPort == 1 {
 		srv.handleDynamicForward(newChan, ctx, d)
 		return
 	}
+	// --------------------------------
 
 	// Standard Static Forwarding
 	srv.handleStaticForward(newChan, ctx, d)
@@ -141,12 +143,8 @@ func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Contex
 	logger := srv.logger.With(slog.String("type", "dynamic"), slog.String("user", ctx.User()))
 	logger.Info("dynamic forward request waiting for selection")
 
-	// Get the synchronization channel
 	targetCh := GetTargetChannel(ctx)
 
-	// Accept the channel immediately, but don't wire it yet.
-	// Note: Typically SSH clients expect the channel accept to mean "connected".
-	// However, we can accept it and just hang on Read/Write until we dial.
 	ch, reqs, err := newChan.Accept()
 	if err != nil {
 		logger.Error("failed to accept channel", "error", err)
@@ -154,17 +152,14 @@ func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Contex
 	}
 	go gossh.DiscardRequests(reqs)
 
-	// Wait for the TUI to send the target address
 	var targetAddr string
 	select {
 	case targetAddr = <-targetCh:
 		logger.Info("target selected via TUI", "target", targetAddr)
 	case <-ctx.Done():
-		logger.Warn("context cancelled before target selection")
 		ch.Close()
 		return
 	case <-time.After(2 * time.Minute):
-		logger.Warn("timeout waiting for target selection")
 		ch.Close()
 		return
 	}
@@ -174,7 +169,6 @@ func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Contex
 		return
 	}
 
-	// Now Dial the target selected in TUI
 	userTunnels.WithLabelValues(ctx.User()).Inc()
 	dctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
@@ -183,11 +177,10 @@ func (srv *Server) handleDynamicForward(newChan gossh.NewChannel, ctx ssh.Contex
 	dconn, err := dialer.DialContext(dctx, "tcp", targetAddr)
 	if err != nil {
 		logger.Error("failed to dial target", "target", targetAddr, "error", err)
-		ch.Close() // Close the SSH channel effectively resetting the connection
+		ch.Close()
 		return
 	}
 
-	// Bridge
 	go func() {
 		defer ch.Close()
 		defer dconn.Close()
@@ -215,14 +208,19 @@ func (srv *Server) handleStaticForward(newChan gossh.NewChannel, ctx ssh.Context
 
 	var addr string
 	var ok bool
+	var displayName string
+
 	ds := strings.Split(d.DestAddr, ".")
 
 	switch {
 	case strings.HasPrefix(d.DestAddr, "svc.") && len(ds) == 3:
+		displayName = fmt.Sprintf("Service %s/%s:%d", ds[1], ds[2], d.DestPort)
 		addr, ok = ports.MatchingService(ds[2], ds[1], int32(d.DestPort))
 	case strings.HasPrefix(d.DestAddr, "pod.") && len(ds) == 3:
+		displayName = fmt.Sprintf("Pod %s/%s:%d", ds[1], ds[2], d.DestPort)
 		addr, ok = ports.MatchingPod(ds[2], ds[1], int32(d.DestPort))
 	case len(ds) == 2:
+		displayName = fmt.Sprintf("Pod %s/%s:%d", ds[0], ds[1], d.DestPort)
 		addr, ok = ports.MatchingPod(ds[1], ds[0], int32(d.DestPort))
 	default:
 		newChan.Reject(gossh.ConnectionFailed, "invalid kubernetes format destination")
@@ -254,6 +252,14 @@ func (srv *Server) handleStaticForward(newChan gossh.NewChannel, ctx ssh.Context
 		return
 	}
 	go gossh.DiscardRequests(reqs)
+
+	// Notify TUI if listening
+	statusCh := GetStatusChannel(ctx)
+	select {
+	case statusCh <- displayName:
+	default:
+		// Channel full or no listener, ignore
+	}
 
 	go func() {
 		defer ch.Close()

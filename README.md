@@ -37,11 +37,11 @@ Note that the port after the `:` is not important, since it will be set dynamica
 ![sshjump ui](/img/term2.png)
 
 ### Static Target
-You can target specific services or pods using the  `srv` or `pod` prefixes, if you don't set a prefix, it defaults to pods.
+You can target specific services or pods using the  `svc` or `pod` prefixes, if you don't set a prefix, it defaults to pods.
 
 Will forward to the `nginx` Kubernetes service.
 ```sh
-ssh -L8080:srv.nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
+ssh -L8080:svc.nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
 Will forward to the first pod named `nginx` Kubernetes service.
@@ -51,7 +51,7 @@ ssh -L8080:nginx.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 
 You can specify the namespace by prefixing the forward address with the namespace.
 ```sh
-ssh -L8080:srv.mynamespace.nginx:8080 -p 2222 myk8s.cluster.domain.tld
+ssh -L8080:svc.mynamespace.nginx:8080 -p 2222 myk8s.cluster.domain.tld
 ```
 
 ## Installation

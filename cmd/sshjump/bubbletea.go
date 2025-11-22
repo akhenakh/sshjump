@@ -34,8 +34,11 @@ type model struct {
 	err      error
 	selected *portItem
 
-	// Channel to signal the SSH forwarder
+	// For static forwards
+	connectedTarget string
+
 	targetChan chan string
+	statusChan chan string
 
 	renderer    *lipgloss.Renderer
 	docStyle    lipgloss.Style
@@ -49,6 +52,7 @@ type model struct {
 
 type portsLoadedMsg []list.Item
 type errMsg error
+type connectionEstablishedMsg string
 
 func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	userConnections.WithLabelValues(s.User()).Inc()
@@ -67,8 +71,8 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		Foreground(lipgloss.Color("230")).
 		Padding(0, 1)
 
-	// Get the communication channel from the context
 	targetChan := GetTargetChannel(s.Context())
+	statusChan := GetStatusChannel(s.Context())
 
 	m := model{
 		state:      stateLoading,
@@ -79,6 +83,7 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		logger:     srv.logger,
 		renderer:   renderer,
 		targetChan: targetChan,
+		statusChan: statusChan,
 		docStyle:   renderer.NewStyle().Margin(1, 2),
 		statusStyle: renderer.NewStyle().
 			Foreground(lipgloss.Color("#FFFFFF")).
@@ -118,10 +123,19 @@ func fetchPorts(user string, srv *Server) tea.Cmd {
 	}
 }
 
+// Command to wait for a static connection event from the server
+func waitForStatus(ch chan string) tea.Cmd {
+	return func() tea.Msg {
+		target := <-ch
+		return connectionEstablishedMsg(target)
+	}
+}
+
 func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		fetchPorts(m.user, m.server),
+		waitForStatus(m.statusChan),
 	)
 }
 
@@ -137,9 +151,6 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "q", "ctrl+c":
-			// If we are connected, we shouldn't close the app with 'q',
-			// as it kills the forwarder. Force Ctrl+C or keep it running.
-			// For now, let's allow quit, which kills the tunnel.
 			return m, tea.Quit
 		case "enter":
 			if m.state == stateList {
@@ -148,11 +159,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.selected = &i
 					m.state = stateConnected
 
-					// Send the real address to the SSH Forwarder handler
-					// This unblocks the DirectTCPIPHandler
 					realAddr := fmt.Sprintf("%s:%d", i.port.addr, i.port.port)
-
-					// Send in a goroutine to avoid blocking UI if channel is full (unlikely)
 					go func() {
 						m.targetChan <- realAddr
 					}()
@@ -168,8 +175,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case portsLoadedMsg:
 		m.list.SetItems(msg)
-		m.state = stateList
+		// Only switch to list view if we haven't already connected (e.g. fast static connect)
+		if m.state == stateLoading {
+			m.state = stateList
+		}
 		return m, nil
+
+	case connectionEstablishedMsg:
+		// Static forward detected!
+		m.connectedTarget = string(msg)
+		m.state = stateConnected
+		// Keep waiting in case other tunnels open, though we only display the last one for now
+		return m, waitForStatus(m.statusChan)
 
 	case errMsg:
 		m.err = msg
@@ -199,22 +216,27 @@ func (m *model) View() string {
 		return m.docStyle.Render(fmt.Sprintf("%s Loading Kubernetes resources...", m.spinner.View()))
 
 	case stateConnected:
-		if m.selected == nil {
-			return ""
+		// Determine display title based on how we connected (dynamic selection vs static)
+		var title, details string
+
+		if m.connectedTarget != "" {
+			// Static Forward
+			title = fmt.Sprintf("✔ Active Tunnel: %s", m.connectedTarget)
+			details = "Traffic is active on your static forward.\n\n(Multiple forwards may be active)"
+		} else if m.selected != nil {
+			// Dynamic Selection
+			title = fmt.Sprintf("✔ Connected to %s", m.selected.Title())
+			details = fmt.Sprintf("Tunnel target set to: %s:%d", m.selected.port.addr, m.selected.port.port)
+		} else {
+			title = "✔ Connected"
 		}
 
-		title := fmt.Sprintf("✔ Connected to %s", m.selected.Title())
-
-		// We cannot know the user's local port (e.g., -L 8082:...), so we provide a generic message.
 		content := fmt.Sprintf(`
-Tunnel target set to:
 %s
 
 You can now connect to your local forwarded port.
-(The connection will hang until you initiate traffic locally)
-
 Press 'q' or Ctrl+C to disconnect.
-`, m.statusStyle.Render(fmt.Sprintf("%s:%d", m.selected.port.addr, m.selected.port.port)))
+`, details)
 
 		return m.docStyle.Render(
 			lipgloss.JoinVertical(lipgloss.Left,
