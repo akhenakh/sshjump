@@ -19,15 +19,15 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.23'
+        go-version: '1.25'
 
     - name: download vendor
       run: go mod vendor
 
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v6
+      uses: golangci/golangci-lint-action@v9.1.0
       with:
-        version: v1.60.1
+        version: v2.6.2
         args: --timeout=5m --modules-download-mode=vendor ./...
 
     - name: Test
