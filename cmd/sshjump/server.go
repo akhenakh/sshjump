@@ -75,7 +75,7 @@ func NewServer(
 
 			s.ChannelHandlers = map[string]ssh.ChannelHandler{
 				"direct-tcpip": jumps.DirectTCPIPHandler,
-				"session":      ssh.DefaultSessionHandler,
+				"session":      jumps.SessionHandler,
 			}
 
 			s.IdleTimeout = IdleTimeout
@@ -109,6 +109,11 @@ func (srv *Server) PublicKeyHandler(ctx ssh.Context, key ssh.PublicKey) bool {
 		return false
 	}
 	if ssh.KeysEqual(key, perms.Key) {
+		// Set TOTP required status if user has TOTP configured
+		if perms.TOTPSecret != "" {
+			SetTOTPRequired(ctx, true)
+			srv.logger.Info("TOTP required for user", "username", ctx.User())
+		}
 		return true
 	}
 	srv.logger.Warn("not matching key", "username", ctx.User(), "ip", ctx.RemoteAddr().String())
@@ -125,6 +130,15 @@ func (srv *Server) DirectTCPIPHandler(
 	d := localForwardChannelData{}
 	if err := gossh.Unmarshal(newChan.ExtraData(), &d); err != nil {
 		newChan.Reject(gossh.ConnectionFailed, "error parsing forward data: "+err.Error())
+		return
+	}
+
+	// Check TOTP verification for port forwarding
+	perms := srv.PermsForUser(ctx.User())
+	resolver := GetTargetResolver(ctx)
+	if NeedsTOTPVerificationWithResolver(ctx, resolver, perms) {
+		newChan.Reject(gossh.ConnectionFailed, "TOTP verification required. Please connect with an interactive session first to verify TOTP.")
+		srv.logger.Warn("TOTP verification required but not completed", "username", ctx.User())
 		return
 	}
 
@@ -325,6 +339,105 @@ func (srv *Server) StartWatchConfig(ctx context.Context, path string) error {
 		}
 	}()
 	return watcher.Add(filepath.Dir(path))
+}
+
+// SessionHandler handles SSH session channels including TOTP verification.
+func (srv *Server) SessionHandler(
+	s *ssh.Server,
+	conn *gossh.ServerConn,
+	newChan gossh.NewChannel,
+	ctx ssh.Context,
+) {
+	perms := srv.PermsForUser(ctx.User())
+
+	// Check if TOTP verification is needed
+	if NeedsTOTPVerification(ctx, perms) {
+		srv.handleTOTPVerification(newChan, ctx, perms)
+		return
+	}
+
+	// No TOTP needed, use default session handler
+	ssh.DefaultSessionHandler(s, conn, newChan, ctx)
+}
+
+func (srv *Server) handleTOTPVerification(
+	newChan gossh.NewChannel,
+	ctx ssh.Context,
+	perms *Permission,
+) {
+	ch, reqs, err := newChan.Accept()
+	if err != nil {
+		srv.logger.Error("failed to accept session channel for TOTP", "error", err)
+		return
+	}
+	defer ch.Close()
+	go gossh.DiscardRequests(reqs)
+
+	// Request PTY for interactive prompt
+	req, ok := <-reqs
+	if !ok || req.Type != "pty-req" {
+		io.WriteString(ch, "TOTP verification requires an interactive PTY session.\n")
+		return
+	}
+	req.Reply(true, nil)
+
+	// Request shell
+	req, ok = <-reqs
+	if !ok || req.Type != "shell" {
+		io.WriteString(ch, "TOTP verification requires a shell session.\n")
+		return
+	}
+	req.Reply(true, nil)
+
+	// Prompt for TOTP code
+	io.WriteString(ch, "\r\nTOTP 2FA Required\r\n")
+	io.WriteString(ch, "=================\r\n")
+	io.WriteString(ch, "Enter TOTP code: ")
+
+	// Read TOTP code from user
+	code := ""
+	buf := make([]byte, 1)
+	for {
+		n, err := ch.Read(buf)
+		if err != nil || n == 0 {
+			io.WriteString(ch, "\r\nError reading input.\r\n")
+			return
+		}
+		char := buf[0]
+
+		if char == '\r' || char == '\n' {
+			break
+		} else if char == 0x03 || char == 0x04 { // Ctrl+C or Ctrl+D
+			io.WriteString(ch, "\r\nCancelled.\r\n")
+			return
+		} else if char == 0x7f || char == 0x08 { // Backspace
+			if len(code) > 0 {
+				code = code[:len(code)-1]
+				io.WriteString(ch, "\b \b")
+			}
+		} else if char >= '0' && char <= '9' && len(code) < 6 {
+			code += string(char)
+			io.WriteString(ch, "*")
+		}
+	}
+
+	// Validate TOTP
+	if ValidateTOTP(perms.TOTPSecret, code) {
+		SetTOTPVerified(ctx, true)
+		srv.logger.Info("TOTP verification successful", "username", ctx.User())
+		io.WriteString(ch, "\r\nTOTP verification successful! You can now use port forwarding.\r\n")
+		io.WriteString(ch, "Press Ctrl+C to exit or keep this session open.\r\n")
+
+		// Keep session open so TOTP remains verified
+		// Wait for session to be closed
+		select {
+		case <-ctx.Done():
+			return
+		}
+	} else {
+		srv.logger.Warn("TOTP verification failed", "username", ctx.User())
+		io.WriteString(ch, "\r\nInvalid TOTP code. Please try again.\r\n")
+	}
 }
 
 func (srv *Server) StopWatchConfig() {

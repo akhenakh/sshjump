@@ -55,6 +55,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Handle TOTP generation command
+	if len(os.Args) > 1 && os.Args[1] == "generate-totp" {
+		secret, err := GenerateTOTPSecret()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error generating TOTP secret: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("TOTP Secret (add to config as totpSecret): %s\n", secret)
+		fmt.Println("\nSetup instructions:")
+		fmt.Println("1. Add the secret to your user config as 'totpSecret'")
+		fmt.Println("2. Scan the QR code or manually enter the secret in your authenticator app")
+		fmt.Println("3. Connect via SSH and enter the TOTP code when prompted")
+		os.Exit(0)
+	}
+
 	logger := createLogger(envCfg)
 	keys, err := readPermission(logger, envCfg.ConfigPath)
 	if err != nil {

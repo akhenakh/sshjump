@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
@@ -18,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pquerna/otp/totp"
 	"golang.org/x/crypto/ssh"
 )
 
@@ -139,6 +141,219 @@ func TestE2E(t *testing.T) {
 
 		if !strings.Contains(buf.String(), "Welcome to nginx!") {
 			t.Errorf("Expected Nginx welcome message, got: %s", buf.String())
+		}
+	})
+
+	t.Run("TOTP Required Without Verification", func(t *testing.T) {
+		config := &ssh.ClientConfig{
+			User: "totpuser",
+			Auth: []ssh.AuthMethod{
+				ssh.PublicKeys(userPrivKey),
+			},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         5 * time.Second,
+		}
+
+		client, err := ssh.Dial("tcp", "localhost:"+localPort, config)
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+		defer client.Close()
+
+		// Attempt to dial through the tunnel without TOTP verification
+		target := fmt.Sprintf("svc.%s.nginx:%s", namespace, targetSvcPort)
+
+		_, err = client.Dial("tcp", target)
+		if err == nil {
+			t.Fatal("Expected port forwarding to fail without TOTP verification, but it succeeded")
+		}
+		if !strings.Contains(err.Error(), "TOTP verification required") {
+			t.Errorf("Expected 'TOTP verification required' error, got: %v", err)
+		}
+	})
+
+	t.Run("TOTP Authentication Success", func(t *testing.T) {
+		config := &ssh.ClientConfig{
+			User: "totpuser",
+			Auth: []ssh.AuthMethod{
+				ssh.PublicKeys(userPrivKey),
+			},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         10 * time.Second,
+		}
+
+		client, err := ssh.Dial("tcp", "localhost:"+localPort, config)
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+		defer client.Close()
+
+		// Open a session for TOTP verification
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("Failed to create session: %v", err)
+		}
+		defer session.Close()
+
+		// Request PTY
+		if err := session.RequestPty("xterm", 80, 24, ssh.TerminalModes{}); err != nil {
+			t.Fatalf("Failed to request PTY: %v", err)
+		}
+
+		// Get stdin/stdout pipes
+		stdin, err := session.StdinPipe()
+		if err != nil {
+			t.Fatalf("Failed to get stdin pipe: %v", err)
+		}
+		stdout, err := session.StdoutPipe()
+		if err != nil {
+			t.Fatalf("Failed to get stdout pipe: %v", err)
+		}
+
+		// Start shell
+		if err := session.Shell(); err != nil {
+			t.Fatalf("Failed to start shell: %v", err)
+		}
+
+		// Read output until we see the TOTP prompt
+		reader := bufio.NewReader(stdout)
+		var output strings.Builder
+		timeout := time.AfterFunc(10*time.Second, func() {
+			t.Fatal("Timeout waiting for TOTP prompt")
+		})
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("Error reading output: %v", err)
+			}
+			output.WriteString(line)
+			t.Logf("Output: %s", strings.TrimSpace(line))
+			if strings.Contains(line, "TOTP code:") {
+				break
+			}
+		}
+		timeout.Stop()
+
+		// Generate valid TOTP code
+		totpSecret := "LJ6T3LIOSHZQE25CRASTSH35E6DPBOPQ2ATMYAHFOFZ73II7OG3Q===="
+		code, err := totp.GenerateCode(totpSecret, time.Now())
+		if err != nil {
+			t.Fatalf("Failed to generate TOTP code: %v", err)
+		}
+		t.Logf("Generated TOTP code: %s", code)
+
+		// Send TOTP code
+		fmt.Fprintf(stdin, "%s\n", code)
+
+		// Read response
+		timeout = time.AfterFunc(5*time.Second, func() {
+			t.Fatal("Timeout waiting for TOTP response")
+		})
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+			output.WriteString(line)
+			t.Logf("Response: %s", strings.TrimSpace(line))
+			if strings.Contains(line, "successful") {
+				break
+			}
+		}
+		timeout.Stop()
+
+		if !strings.Contains(output.String(), "successful") {
+			t.Errorf("Expected TOTP verification to succeed, got output: %s", output.String())
+		}
+
+		t.Log("TOTP authentication successful!")
+	})
+
+	t.Run("TOTP Authentication Wrong Code", func(t *testing.T) {
+		config := &ssh.ClientConfig{
+			User: "totpuser",
+			Auth: []ssh.AuthMethod{
+				ssh.PublicKeys(userPrivKey),
+			},
+			HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+			Timeout:         10 * time.Second,
+		}
+
+		client, err := ssh.Dial("tcp", "localhost:"+localPort, config)
+		if err != nil {
+			t.Fatalf("Failed to create client: %v", err)
+		}
+		defer client.Close()
+
+		// Open a session for TOTP verification
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatalf("Failed to create session: %v", err)
+		}
+		defer session.Close()
+
+		// Request PTY
+		if err := session.RequestPty("xterm", 80, 24, ssh.TerminalModes{}); err != nil {
+			t.Fatalf("Failed to request PTY: %v", err)
+		}
+
+		// Get stdin/stdout pipes
+		stdin, err := session.StdinPipe()
+		if err != nil {
+			t.Fatalf("Failed to get stdin pipe: %v", err)
+		}
+		stdout, err := session.StdoutPipe()
+		if err != nil {
+			t.Fatalf("Failed to get stdout pipe: %v", err)
+		}
+
+		// Start shell
+		if err := session.Shell(); err != nil {
+			t.Fatalf("Failed to start shell: %v", err)
+		}
+
+		// Read output until we see the TOTP prompt
+		reader := bufio.NewReader(stdout)
+		timeout := time.AfterFunc(10*time.Second, func() {
+			t.Fatal("Timeout waiting for TOTP prompt")
+		})
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				t.Fatalf("Error reading output: %v", err)
+			}
+			t.Logf("Output: %s", strings.TrimSpace(line))
+			if strings.Contains(line, "TOTP code:") {
+				break
+			}
+		}
+		timeout.Stop()
+
+		// Send wrong TOTP code
+		fmt.Fprintf(stdin, "000000\n")
+
+		// Read response
+		var output strings.Builder
+		timeout = time.AfterFunc(5*time.Second, func() {
+			t.Fatal("Timeout waiting for TOTP response")
+		})
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				break
+			}
+			output.WriteString(line)
+			t.Logf("Response: %s", strings.TrimSpace(line))
+			if strings.Contains(line, "Invalid") {
+				break
+			}
+		}
+		timeout.Stop()
+
+		if !strings.Contains(output.String(), "Invalid") {
+			t.Errorf("Expected 'Invalid' in output for wrong code, got: %s", output.String())
 		}
 	})
 }
@@ -282,7 +497,16 @@ data:
         - name: "nginx"
           ports:
             - %s
-`, namespace, indent(string(privPEM), 4), userPubKey, namespace, targetSvcPort)
+    - username: "totpuser"
+      key: "%s"
+      totpSecret: "LJ6T3LIOSHZQE25CRASTSH35E6DPBOPQ2ATMYAHFOFZ73II7OG3Q===="
+      namespaces:
+      - namespace: "%s"
+        services:
+        - name: "nginx"
+          ports:
+            - %s
+`, namespace, indent(string(privPEM), 4), userPubKey, namespace, targetSvcPort, userPubKey, namespace, targetSvcPort)
 
 	kubectlApply(t, configMap)
 

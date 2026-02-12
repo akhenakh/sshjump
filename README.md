@@ -180,14 +180,14 @@ There is a `Dockerfile` to be used with Docker & Podman too.
 
 ## TODO
 
-- [ ] restrict access to a namespace
-- [ ] restrict access to a pod
+- [X] restrict access to a namespace
+- [X] restrict access to a pod
 - [ ] Jumphost ssh
-- [ ] TUI
-- [ ] OTP
+- [X] TUI
+- [X] OTP
 - [X] logs
 - [X] user tunnel connection metric
-- [ ] allow/deny metrics
+- [X] allow/deny metrics
 - [X] reload config on changes
 - [ ] config map example
 - [X] kubernetes example

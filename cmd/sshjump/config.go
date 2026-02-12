@@ -31,6 +31,8 @@ type Permission struct {
 	Username      string        `yaml:"username"` // Username is the SSH username for the user.
 	AuthorizedKey string        `yaml:"key"`      // AuthorizedKey is the authorized key for the user.
 	Key           ssh.PublicKey `yaml:"-"`
-	Namespaces    []Namespace   `yaml:"namespaces"` // Namespaces is a list of namespaces the user has access to.
-	AllowAll      bool          `yaml:"allowAll"`   // allow this user to connect to every detected ports
+	Namespaces    []Namespace   `yaml:"namespaces"`           // Namespaces is a list of namespaces the user has access to.
+	AllowAll      bool          `yaml:"allowAll"`             // allow this user to connect to every detected ports
+	TOTPSecret    string        `yaml:"totpSecret,omitempty"` // TOTPSecret is the base32 encoded TOTP secret for 2FA.
+	TOTPVerified  bool          `yaml:"-"`                    // TOTPVerified is set to true after successful TOTP verification (runtime only).
 }

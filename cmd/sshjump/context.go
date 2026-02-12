@@ -13,9 +13,10 @@ const (
 
 // TargetResolver acts as a thread-safe store for the user's selection.
 type TargetResolver struct {
-	mu       sync.RWMutex
-	target   string
-	Resolved chan struct{} // Closed when a target is selected
+	mu           sync.RWMutex
+	target       string
+	TOTPVerified bool          // TOTPVerified is set to true after successful TOTP verification
+	Resolved     chan struct{} // Closed when a target is selected
 }
 
 // GetTargetResolver returns the resolver state object for this session.

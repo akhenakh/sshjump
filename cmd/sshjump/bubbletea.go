@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/ssh"
@@ -19,20 +20,22 @@ import (
 type state int
 
 const (
-	stateLoading state = iota
+	stateTOTP state = iota
+	stateLoading
 	stateList
 	stateConnected
 	stateError
 )
 
 type model struct {
-	state    state
-	list     list.Model
-	spinner  spinner.Model
-	user     string
-	server   *Server
-	err      error
-	selected *portItem
+	state     state
+	list      list.Model
+	spinner   spinner.Model
+	totpInput textinput.Model
+	user      string
+	server    *Server
+	err       error
+	selected  *portItem
 
 	// For static forwards
 	connectedTarget string
@@ -53,6 +56,7 @@ type model struct {
 type portsLoadedMsg []list.Item
 type errMsg error
 type connectionEstablishedMsg string
+type totpValidatedMsg bool
 
 func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 	userConnections.WithLabelValues(s.User()).Inc()
@@ -71,15 +75,31 @@ func (srv *Server) teaHandler(s ssh.Session) (tea.Model, []tea.ProgramOption) {
 		Foreground(lipgloss.Color("230")).
 		Padding(0, 1)
 
+	// Initialize TOTP input
+	ti := textinput.New()
+	ti.Placeholder = "Enter 6-digit TOTP code"
+	ti.CharLimit = 6
+	ti.Width = 20
+	ti.EchoMode = textinput.EchoPassword
+	ti.Focus()
+
 	resolver := GetTargetResolver(s.Context())
 	statusChan := GetStatusChannel(s.Context())
 
+	// Determine initial state based on TOTP requirement
+	perms := srv.PermsForUser(s.User())
+	initialState := stateLoading
+	if NeedsTOTPVerification(s.Context(), perms) {
+		initialState = stateTOTP
+	}
+
 	m := model{
-		state:      stateLoading,
+		state:      initialState,
 		user:       s.User(),
 		server:     srv,
 		list:       l,
 		spinner:    sp,
+		totpInput:  ti,
 		logger:     srv.logger,
 		renderer:   renderer,
 		resolver:   resolver,
@@ -132,6 +152,11 @@ func waitForStatus(ch chan string) tea.Cmd {
 }
 
 func (m *model) Init() tea.Cmd {
+	// If TOTP is required, just blink the cursor
+	if m.state == stateTOTP {
+		return textinput.Blink
+	}
+
 	return tea.Batch(
 		m.spinner.Tick,
 		fetchPorts(m.user, m.server),
@@ -153,6 +178,20 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "enter":
+			if m.state == stateTOTP {
+				// Validate TOTP code
+				code := m.totpInput.Value()
+				perms := m.server.PermsForUser(m.user)
+				if ValidateTOTP(perms.TOTPSecret, code) {
+					return m, func() tea.Msg {
+						return totpValidatedMsg(true)
+					}
+				} else {
+					m.totpInput.SetValue("")
+					m.err = fmt.Errorf("invalid TOTP code")
+					return m, nil
+				}
+			}
 			if m.state == stateList {
 				i, ok := m.list.SelectedItem().(portItem)
 				if ok {
@@ -196,6 +235,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = stateConnected
 		return m, waitForStatus(m.statusChan)
 
+	case totpValidatedMsg:
+		if bool(msg) {
+			// Set TOTP as verified in resolver
+			m.resolver.mu.Lock()
+			m.resolver.TOTPVerified = true
+			m.resolver.mu.Unlock()
+			m.err = nil
+			m.state = stateLoading
+			return m, tea.Batch(
+				m.spinner.Tick,
+				fetchPorts(m.user, m.server),
+				waitForStatus(m.statusChan),
+			)
+		}
+
 	case errMsg:
 		m.err = msg
 		m.state = stateError
@@ -203,6 +257,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	switch m.state {
+	case stateTOTP:
+		m.totpInput, cmd = m.totpInput.Update(msg)
+		cmds = append(cmds, cmd)
 	case stateLoading:
 		m.spinner, cmd = m.spinner.Update(msg)
 		cmds = append(cmds, cmd)
@@ -220,6 +277,31 @@ func (m *model) View() string {
 	}
 
 	switch m.state {
+	case stateTOTP:
+		title := m.renderer.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("205")).
+			Render("🔐 TOTP 2FA Required")
+
+		instructions := "Enter your 6-digit TOTP code to continue."
+		if m.err != nil {
+			instructions = m.renderer.NewStyle().
+				Foreground(lipgloss.Color("#FF0000")).
+				Render("❌ Invalid TOTP code. Please try again.")
+		}
+
+		return m.docStyle.Render(
+			lipgloss.JoinVertical(lipgloss.Left,
+				title,
+				"",
+				instructions,
+				"",
+				m.totpInput.View(),
+				"",
+				m.renderer.NewStyle().Foreground(lipgloss.Color("241")).Render("Press Enter to submit, Ctrl+C to quit"),
+			),
+		)
+
 	case stateLoading:
 		return m.docStyle.Render(fmt.Sprintf("%s Loading Kubernetes resources...", m.spinner.View()))
 
