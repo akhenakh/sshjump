@@ -137,6 +137,74 @@ permissions:
   namespaces:
   - namespace: "projecta"
 ```
+
+## TOTP Two-Factor Authentication (2FA)
+
+SSHJump supports TOTP (Time-based One-Time Password) for two-factor authentication, adding an extra layer of security beyond SSH public key authentication.
+
+### Generating a TOTP Secret
+
+To enable TOTP for a user, first generate a secret:
+
+```sh
+./sshjump generate-totp
+```
+
+This will output a base32-encoded secret that should be added to your configuration file. The user will need to add this secret to their authenticator app (Google Authenticator, Authy, etc.).
+
+### Configuring TOTP
+
+Add the `totpSecret` field to the user's permission entry in your configuration:
+
+```yaml
+version: sshjump.inair.space/v1
+
+permissions:
+- username: "bob"
+  authorizedKey: "ssh-ed25519 AAAAAasasasasas bob@sponge.net"
+  totpSecret: "JBSWY3DPEHPK3PXP"
+  namespaces:
+  - namespace: "projecta"
+    containers:
+    - name: "nginx"
+      ports:
+        - 8080
+```
+
+### User Setup
+
+After the administrator adds the TOTP secret to the config, the user should:
+
+1. **Add the secret to their authenticator app:**
+   - Manually enter the secret provided by the administrator
+   - Or scan a QR code generated from the secret
+
+2. **Connect via SSH:**
+   ```sh
+   ssh -L8080:svc.projecta.nginx:8080 -p 2222 sshjump.example.com
+   ```
+
+3. **Enter the TOTP code:**
+   - If the user has TOTP configured, they will be prompted to enter their 6-digit code
+   - For interactive TUI mode: a prompt will appear before showing the resource list
+   - For direct port-forwarding: the user must first open an interactive session to verify TOTP
+
+**Important:** Once TOTP is verified in a session, port-forwarding works for the duration of that session. If the session disconnects, TOTP must be re-verified.
+
+### Interactive TOTP Verification
+
+If using direct port-forwarding (not the TUI), users must first open an interactive session:
+
+```sh
+# First, verify TOTP in an interactive session
+ssh -p 2222 sshjump.example.com
+# Enter TOTP code when prompted
+# Keep this session open
+
+# Then, in another terminal, use port-forwarding
+ssh -L8080:svc.projecta.nginx:8080 -p 2222 sshjump.example.com
+```
+
 ## Tailscale
 
 It's possible to join your tailnet by providing a ts auth key.
@@ -144,6 +212,16 @@ It's possible to join your tailnet by providing a ts auth key.
 Pass the key in a file (from secret or configmaps) using the env variable `TS_AUTHKEY_PATH`.
 
 ## Features
+
+- **SSH Public Key Authentication** - Secure authentication using standard SSH keys
+- **TOTP Two-Factor Authentication** - Optional 2FA using time-based one-time passwords
+- **Dynamic Target Selection** - Interactive TUI for selecting Kubernetes resources
+- **Static Port Forwarding** - Direct forwarding to specific pods and services
+- **Kubernetes Integration** - Automatic discovery of pods and services
+- **Namespace Restrictions** - Fine-grained access control per namespace
+- **Config Hot Reload** - Configuration updates without restart
+- **Prometheus Metrics** - Connection and tunnel metrics
+- **Tailscale Support** - Join your tailnet for secure access
 
 
 ## End to End Testing
